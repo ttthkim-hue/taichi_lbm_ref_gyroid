@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.pyc
+.venv_v32/
+
+# 대용량 바이너리
+archive/*.npy
+*.npy
+
+# 빌드 산출물
+paper/jkcs/*.aux
+paper/jkcs/*.log
+paper/jkcs/*.out
+paper/jkcs/*.bbl
+paper/jkcs/*.blg
+paper/jkcs/*.fls
+paper/jkcs/*.fdb_latexmk
+paper/jkcs/*.synctex.gz
+paper/jkcs/*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# geometry_exchange_ansys: 전체 폴더 무시하면 GitHub CI에 소스가 안 올라감.
+# 가상환경·로컬 PyInstaller 산출물·(선택) 잘못 배포된 Linux ELF만 제외
+geometry_exchange_ansys/**/.venv/
+geometry_exchange_ansys/**/.venv_win/
+geometry_exchange_ansys/**/__pycache__/
+geometry_exchange_ansys/**/build/
+geometry_exchange_ansys/**/dist/
+# Linux에서 빌드된 ELF인데 확장자만 .exe 인 파일 — Windows CI 산출물로 대체
+geometry_exchange_ansys/exe_file_final/gyroid_generator/delivery_package/GyroidGenerator.exe
+
+# ---------------------------------------------------------------------------
+# GitHub 푸시 용량 (LBM 결과·로그는 로컬 전용; Gyroid exe CI는 소스만 필요)
+# ---------------------------------------------------------------------------
+results/
+logs/
+archive/
+Results_EmptyDuct*/
+Results_EmptyDuct_Taichi/
+Results_EmptyDuct_v3/
+Results_Ref_dx02/
+# 루트 잡로그·대용량 마스크
+log_*.txt
+run_l*_log.txt
+batch_log.txt
+plan22v_verify.log
+gyroid_wall_mask.png
+verify_empty_duct_mask.png
+
+# GitHub 100MB/file 제한 초과 (CI·소스만 푸시)
+geometry_exchange_ansys/exe_file_final/gyroid_generator/delivery_package.zip
+geometry_openscad/gyroid_duct_v32_final.stl
+geometry_openscad/gyroid_taichi_formula.stl

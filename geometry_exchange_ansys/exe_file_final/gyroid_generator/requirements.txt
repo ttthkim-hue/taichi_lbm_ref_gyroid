@@ -1,0 +1,7 @@
+numpy
+scipy
+scikit-image
+trimesh
+manifold3d
+cadquery
+pyinstaller

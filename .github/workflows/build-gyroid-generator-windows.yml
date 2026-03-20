@@ -1,0 +1,57 @@
+# GyroidGenerator — Windows PE (.exe) 빌드 (GitHub-hosted windows-latest)
+# 산출물: Actions 탭 → 해당 워크플로 실행 → Artifacts 에서 GyroidGenerator-windows.zip 다운로드
+
+name: Build GyroidGenerator (Windows exe)
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_cadquery:
+        description: "cadquery 설치 (STEP 내장, 용량·시간 증가)"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main, master]
+    paths:
+      - "geometry_exchange_ansys/exe_file_final/gyroid_generator/**"
+      - ".github/workflows/build-gyroid-generator-windows.yml"
+
+jobs:
+  pyinstaller-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: geometry_exchange_ansys/exe_file_final/gyroid_generator
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: geometry_exchange_ansys/exe_file_final/gyroid_generator/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          pip install numpy scipy scikit-image trimesh manifold3d pyinstaller
+
+      - name: Optional cadquery (STEP)
+        # workflow_dispatch에서만 inputs 사용; push 트리거 시에는 이 단계 건너뜀
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.install_cadquery }}
+        run: pip install cadquery
+
+      - name: PyInstaller
+        run: pyinstaller --noconfirm GyroidGenerator.spec
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GyroidGenerator-windows
+          path: geometry_exchange_ansys/exe_file_final/gyroid_generator/dist/GyroidGenerator.exe
+          if-no-files-found: error
