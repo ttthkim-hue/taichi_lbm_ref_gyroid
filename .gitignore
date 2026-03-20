@@ -31,6 +31,7 @@ geometry_exchange_ansys/**/build/
 geometry_exchange_ansys/**/dist/
 # Linux에서 빌드된 ELF인데 확장자만 .exe 인 파일 — Windows CI 산출물로 대체
 geometry_exchange_ansys/exe_file_final/gyroid_generator/delivery_package/GyroidGenerator.exe
+geometry_exchange_ansys/exe_file_final/gyroid_generator/delivery_package/GyroidGenerator_Windows_CI.exe
 
 # ---------------------------------------------------------------------------
 # GitHub 푸시 용량 (LBM 결과·로그는 로컬 전용; Gyroid exe CI는 소스만 필요)
