@@ -4,6 +4,8 @@
 import gc
 import os
 import queue
+import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -247,82 +249,74 @@ class GyroidApp:
 
         return combined
 
-    # ── STEP 변환 ────────────────────────────────────────────────
+    # ── STEP 변환 (별도 프로세스) ──────────────────────────────────
+
+    @staticmethod
+    def _find_converter() -> str:
+        """step_converter.py 또는 step_converter.exe 경로를 찾는다."""
+        # PyInstaller onedir: exe 옆에 step_converter.exe 또는 _internal 안
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(sys.executable)
+            for name in ("step_converter.exe", "step_converter"):
+                p = os.path.join(base, name)
+                if os.path.isfile(p):
+                    return p
+            # _internal 안의 .py 파일
+            p = os.path.join(base, "_internal", "step_converter.py")
+            if os.path.isfile(p):
+                return p
+        # 개발 환경: 같은 폴더의 .py
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step_converter.py")
+        if os.path.isfile(p):
+            return p
+        return ""
 
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:
-        self.log_msg("   STEP 변환 시작 (OCP)...")
-        try:
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
-            from OCP.Interface import Interface_Static
-            from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
-            from OCP.StlAPI import StlAPI_Reader
-            from OCP.TopAbs import TopAbs_SHELL
-            from OCP.TopoDS import TopoDS, TopoDS_Shape
-            from OCP.TopExp import TopExp_Explorer
-        except ImportError as exc:
-            self.log_msg(f"   OCP(cadquery) 없음 — STEP 생략: {exc}")
-            self.log_msg("   대안: SpaceClaim에서 STL → Convert to Solid → STEP")
+        """별도 프로세스에서 STEP 변환 실행 — GUI 멈춤 방지."""
+        converter = self._find_converter()
+        if not converter:
+            self.log_msg("   step_converter를 찾을 수 없음")
             return False
 
         stl_abs = str(Path(stl_path).resolve())
         step_abs = str(Path(step_path).resolve())
 
+        # 실행 명령 결정
+        if converter.endswith(".py"):
+            cmd = [sys.executable, converter, stl_abs, step_abs]
+        else:
+            cmd = [converter, stl_abs, step_abs]
+
+        self.log_msg(f"   STEP 변환 프로세스 시작...")
+        self.log_msg(f"   CMD: {os.path.basename(converter)}")
+
         try:
-            self.log_msg("   (1/4) STL 로드...")
-            reader = StlAPI_Reader()
-            shape = TopoDS_Shape()
-            if not reader.Read(shape, stl_abs):
-                self.log_msg(f"   STL 읽기 실패: {stl_abs}")
-                return False
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
 
-            self.log_msg("   (2/4) Sewing...")
-            t_sew = time.time()
-            sewing = BRepBuilderAPI_Sewing(0.1)
-            sewing.SetNonManifoldMode(True)
-            sewing.Add(shape)
-            sewing.Perform()
-            sewn = sewing.SewedShape()
-            self.log_msg(f"   Sewing 완료 ({time.time() - t_sew:.1f}s)")
+            # 실시간 로그 읽기
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    self.log_msg(f"   {line}")
 
-            if sewn.IsNull():
-                self.log_msg("   Sewing 결과 null — STEP 생략")
-                return False
-
-            result = sewn
-            self.log_msg("   (3/4) Shell → Solid...")
-            try:
-                explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
-                if explorer.More():
-                    shell = TopoDS.Shell_s(explorer.Current())
-                    maker = BRepBuilderAPI_MakeSolid(shell)
-                    if maker.IsDone():
-                        result = maker.Solid()
-                        self.log_msg("   Solid 변환 성공")
-                    else:
-                        self.log_msg("   Solid 변환 실패 → Shell로 진행")
-            except Exception as exc:
-                self.log_msg(f"   Solid화 생략: {exc}")
-
-            self.log_msg("   (4/4) STEP 쓰기 (AP214)...")
-            t_w = time.time()
-            writer = STEPControl_Writer()
-            Interface_Static.SetCVal_s("write.step.schema", "AP214")
-            writer.Transfer(result, STEPControl_AsIs)
-            wr_status = writer.Write(step_abs)
-            self.log_msg(f"   Write 완료 ({time.time() - t_w:.1f}s), status={wr_status}")
-
-            if wr_status == 1 and os.path.isfile(step_abs):
-                size_mb = os.path.getsize(step_abs) / 1024 / 1024
-                self.log_msg(f"   STEP 저장 완료: {step_abs} ({size_mb:.1f} MB)")
+            proc.wait()
+            if proc.returncode == 0:
+                if os.path.isfile(step_abs):
+                    size_mb = os.path.getsize(step_abs) / 1024 / 1024
+                    self.log_msg(f"   STEP 저장 완료 ({size_mb:.1f} MB)")
                 return True
-
-            self.log_msg(f"   STEP 저장 실패 (status={wr_status})")
-            return False
+            else:
+                self.log_msg(f"   STEP 변환 실패 (exit code {proc.returncode})")
+                return False
         except Exception as exc:
-            self.log_msg(f"   STEP 변환 예외: {exc}")
-            import traceback
-
-            self.log_msg(traceback.format_exc())
+            self.log_msg(f"   STEP 프로세스 실행 오류: {exc}")
             return False
 
     # ── 메인 생성 흐름 ──────────────────────────────────────────
