@@ -71,13 +71,17 @@ jobs:
           from skimage.measure import marching_cubes
           import trimesh
 
-          a, t_val, res = 5.0, 0.3, 30
-          x = np.linspace(1.0, 24.4, 50)
-          X, Y, Z = np.meshgrid(x, x, np.linspace(5.0, 105.0, 100), indexing='ij')
+          # Small grid for CI speed (20x20x20 → ~5K faces, sewing <30s)
+          a, t_val = 5.0, 0.3
+          n = 20
+          x = np.linspace(1.0, 24.4, n)
+          z = np.linspace(5.0, 105.0, n)
+          X, Y, Z = np.meshgrid(x, x, z, indexing='ij')
           k = 2*np.pi/a
           phi = np.sin(k*X)*np.cos(k*Y) + np.sin(k*Y)*np.cos(k*Z) + np.sin(k*Z)*np.cos(k*X)
+          sp = (24.4-1.0)/(n-1)
           verts, faces, _, _ = marching_cubes(phi, level=-t_val,
-              spacing=((24.4-1.0)/49, (24.4-1.0)/49, 100.0/99))
+              spacing=(sp, sp, 100.0/(n-1)))
           verts[:, 0] += 1.0; verts[:, 1] += 1.0; verts[:, 2] += 5.0
           mesh = trimesh.Trimesh(vertices=verts, faces=faces)
 

@@ -200,9 +200,11 @@ class GyroidApp:
         finally:
             self._ui_btn(True)
 
+    STEP_MAX_FACES = 50_000  # Sewing은 O(n^2) 이상 — 이 이상이면 decimation 필수
+
     @staticmethod
-    def _clean_mesh(mesh: "trimesh.Trimesh") -> "trimesh.Trimesh":
-        """STEP 변환 전 메시 전처리 — 법선 수정, 퇴화 면 제거, 정점 병합."""
+    def _clean_mesh(mesh: "trimesh.Trimesh", log_fn=None) -> "trimesh.Trimesh":
+        """STEP 변환 전 메시 전처리 — 법선 수정, 퇴화 면 제거, 정점 병합, decimation."""
         trimesh.repair.fix_normals(mesh)
         trimesh.repair.fix_winding(mesh)
         # 퇴화 삼각형(면적 0) 제거
@@ -211,8 +213,22 @@ class GyroidApp:
             mesh.update_faces(valid)
         mesh.merge_vertices()
         mesh.remove_unreferenced_vertices()
-        # 중복 면 제거 (unique_faces)
         mesh.process(validate=True)
+
+        # Decimation: Sewing이 대면 수 메시에서 극도로 느려지므로 축소
+        n_faces = len(mesh.faces)
+        if n_faces > GyroidApp.STEP_MAX_FACES:
+            ratio = GyroidApp.STEP_MAX_FACES / n_faces
+            if log_fn:
+                log_fn(f"   Decimation: {n_faces:,} → ~{GyroidApp.STEP_MAX_FACES:,} 면 (비율 {ratio:.2f})")
+            try:
+                mesh = mesh.simplify_quadric_decimation(GyroidApp.STEP_MAX_FACES)
+                mesh.process(validate=True)
+                if log_fn:
+                    log_fn(f"   Decimation 완료: {len(mesh.faces):,} 면")
+            except Exception as exc:
+                if log_fn:
+                    log_fn(f"   ⚠️ Decimation 실패 ({exc}), 원본 메시로 진행")
         return mesh
 
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:
@@ -395,21 +411,22 @@ class GyroidApp:
         stl_path = os.path.join(self.output_dir, f"{base_name}.stl")
         step_path = os.path.join(self.output_dir, f"{base_name}.step")
 
-        # STEP 변환이 필요하면 메시 전처리 수행 (STL 품질 향상)
-        if self.step_var.get():
-            self.log_msg("🔧 STEP 변환을 위한 메시 전처리 중...")
-            combined = self._clean_mesh(combined)
-            self.log_msg(f"   전처리 후 면 수: {len(combined.faces):,}")
-
         if self.stl_var.get():
             combined.export(stl_path, file_type="stl")
             stl_size = os.path.getsize(stl_path) / 1024 / 1024
             self.log_msg(f"✅ STL 저장: {stl_path} ({stl_size:.1f} MB)")
 
         if self.step_var.get():
-            if not os.path.exists(stl_path):
-                combined.export(stl_path, file_type="stl")
-                self.log_msg("ℹ️ STEP 변환을 위해 STL 임시 저장")
+            # STEP용 메시 전처리 (decimation 포함) — STL은 원본 해상도 유지
+            self.log_msg("🔧 STEP 변환을 위한 메시 전처리 중...")
+            step_mesh = self._clean_mesh(combined.copy(), log_fn=self.log_msg)
+            self.log_msg(f"   전처리 후 면 수: {len(step_mesh.faces):,}")
+            # decimation된 메시로 임시 STL 생성 (STEP 변환용)
+            step_stl_path = stl_path if not self.stl_var.get() else stl_path + ".step_tmp.stl"
+            step_mesh.export(step_stl_path, file_type="stl")
+            if self.stl_var.get():
+                self.log_msg("ℹ️ STEP 변환용 임시 STL 생성 (decimated)")
+            del step_mesh
             # OCP가 STL을 다시 읽으므로 Python 쪽 대용량 메쉬 해제
             try:
                 del combined
@@ -419,7 +436,10 @@ class GyroidApp:
                 pass
             gc.collect()
             self.log_msg("⏳ 메모리 정리 후 STEP 변환 진행...")
-            self.convert_to_step(stl_path, step_path)
+            self.convert_to_step(step_stl_path, step_path)
+            # 임시 STL 정리
+            if step_stl_path != stl_path and os.path.isfile(step_stl_path):
+                os.remove(step_stl_path)
 
         self.log_msg("🎉 완료!")
 
