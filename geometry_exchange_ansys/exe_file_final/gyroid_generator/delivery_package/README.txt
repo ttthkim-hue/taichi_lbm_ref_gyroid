@@ -16,7 +16,11 @@ Gyroid Catalyst Support - STEP/STL Generator
   a = 3~8 mm (작을수록 촘촘, 표면적↑)
   t = 0.05~0.5 (클수록 벽 두꺼움)
 
-기본 제공 형상:
+출력 파일명 예:
+  gyroid_a50_t30_buf.stl   - 버퍼 ON (z 5~105mm), a=5, t=0.3
+  gyroid_a50_t30_fullz.stl - 버퍼 OFF (z 0~110mm)
+
+기본 제공 형상 (참고):
   gyroid_a50_t30.step    - a=5mm, t=0.3 (기준)
   empty_duct_v32.step    - 빈 덕트
   reference_6x6_v32.step - 6x6 채널

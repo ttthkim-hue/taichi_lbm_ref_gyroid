@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import gc
 import os
 import queue
 import threading
@@ -18,19 +19,20 @@ DUCT_OUTER = 25.4
 WALL = 1.0
 DUCT_INNER = DUCT_OUTER - 2 * WALL
 TOTAL_Z = 110.0
-BUFFER = 5.0
-MAIN_START = BUFFER
-MAIN_END = TOTAL_Z - BUFFER
+Z_BUFFER_MM = 5.0
 
 
 class GyroidApp:
+    """Gyroid STL/STEP 생성 GUI. 워커 스레드에서는 Tk 위젯/after 호출 금지 → ui_queue로 메인 스레드에 위임."""
+
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Gyroid Catalyst Support - STEP Generator")
-        self.root.geometry("620x840")
+        self.root.geometry("620x900")
         self.root.resizable(False, False)
 
         self.log_queue: queue.Queue[str] = queue.Queue()
+        self.ui_queue: queue.Queue[tuple] = queue.Queue()
         self.output_dir = os.getcwd()
 
         self.a_var = tk.DoubleVar(value=5.0)
@@ -39,9 +41,10 @@ class GyroidApp:
         self.duct_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
         self.step_var = tk.BooleanVar(value=True)
+        self.z_buffer_var = tk.BooleanVar(value=True)
 
         self._build_ui()
-        self.root.after(100, self._flush_log_queue)
+        self.root.after(50, self._tick_main_thread)
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, padding=10)
@@ -73,10 +76,28 @@ class GyroidApp:
             row=6, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
 
+        ttk.Checkbutton(
+            param_frame,
+            text="Z 방향 앞·뒤 5mm 버퍼 (Gyroid 도메인을 z=5~105mm로 제한)",
+            variable=self.z_buffer_var,
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(
+            param_frame,
+            text="끄면 z=0~110mm 전체 높이에 Gyroid 생성 (덕트 외벽 옵션과 별개)",
+            foreground="gray",
+            font=("TkDefaultFont", 8),
+        ).grid(row=8, column=0, columnspan=2, sticky="w")
+
         out_frame = ttk.LabelFrame(main, text="출력 설정", padding=10)
         out_frame.pack(fill="x", padx=4, pady=4)
         ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
+        ttk.Label(
+            out_frame,
+            text="※ STEP은 STL보다 오래 걸립니다. 면 수가 많으면 수 분~10분 이상일 수 있습니다.",
+            foreground="gray",
+            font=("TkDefaultFont", 8),
+        ).pack(anchor="w", pady=(4, 0))
 
         path_frame = ttk.Frame(main)
         path_frame.pack(fill="x", padx=4, pady=(4, 8))
@@ -90,7 +111,7 @@ class GyroidApp:
 
         log_frame = ttk.LabelFrame(main, text="상태 로그", padding=6)
         log_frame.pack(fill="both", expand=True, padx=4, pady=4)
-        self.log = scrolledtext.ScrolledText(log_frame, height=16, state="disabled", font=("Consolas", 9))
+        self.log = scrolledtext.ScrolledText(log_frame, height=14, state="disabled", font=("Consolas", 9))
         self.log.pack(fill="both", expand=True)
 
         info_frame = ttk.LabelFrame(main, text="수식 / 파라미터 가이드", padding=8)
@@ -110,7 +131,7 @@ class GyroidApp:
         ).pack(anchor="w")
         ttk.Label(
             info_frame,
-            text="a: 3~8 mm (작을수록 촘촘, 표면적↑, 압손↑) | t: 0.05~0.5 (클수록 벽 두꺼움, 공극률↓)",
+            text="a: 3~8 mm | t: 0.05~0.5 | 버퍼 ON 시 Gyroid z 구간만 5~105mm",
             font=("Consolas", 8),
             foreground="gray",
         ).pack(anchor="w")
@@ -127,17 +148,36 @@ class GyroidApp:
         self.log.see("end")
         self.log.config(state="disabled")
 
-    def _flush_log_queue(self) -> None:
+    def _tick_main_thread(self) -> None:
+        """메인 스레드 전용: ui_queue + log_queue 처리 (워커는 여기만 통해 UI 갱신)."""
+        try:
+            while True:
+                cmd = self.ui_queue.get_nowait()
+                if cmd[0] == "btn":
+                    self._set_button_state(cmd[1])
+                elif cmd[0] == "vars":
+                    a, t, res = cmd[1], cmd[2], cmd[3]
+                    self.a_var.set(a)
+                    self.t_var.set(t)
+                    self.res_var.set(res)
+        except queue.Empty:
+            pass
         try:
             while True:
                 msg = self.log_queue.get_nowait()
                 self._append_log(msg)
         except queue.Empty:
             pass
-        self.root.after(100, self._flush_log_queue)
+        self.root.after(50, self._tick_main_thread)
 
     def log_msg(self, msg: str) -> None:
         self.log_queue.put(msg)
+
+    def _ui_btn(self, enabled: bool) -> None:
+        self.ui_queue.put(("btn", enabled))
+
+    def _ui_vars(self, a: float, t: float, res: int) -> None:
+        self.ui_queue.put(("vars", a, t, res))
 
     def _set_button_state(self, enabled: bool) -> None:
         self.btn.config(state=("normal" if enabled else "disabled"))
@@ -154,11 +194,14 @@ class GyroidApp:
             self.do_generate()
         except Exception as exc:
             self.log_msg(f"❌ 오류: {exc}")
+            import traceback
+
+            self.log_msg(traceback.format_exc())
         finally:
-            self.root.after(0, lambda: self._set_button_state(True))
+            self._ui_btn(True)
 
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:
-        self.log_msg("🔄 STEP 변환 중 (OCP)...")
+        self.log_msg("🔄 STEP 변환 시작 (OCP) — 면이 많으면 수 분 이상 걸릴 수 있습니다.")
         try:
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
             from OCP.Interface import Interface_Static
@@ -177,18 +220,23 @@ class GyroidApp:
         step_abs = str(Path(step_path).resolve())
 
         try:
+            self.log_msg("   (1/4) STL 파일 로드 (OCP Reader)...")
             reader = StlAPI_Reader()
             shape = TopoDS_Shape()
             if not reader.Read(shape, stl_abs):
                 self.log_msg(f"❌ STL 읽기 실패: {stl_abs}")
                 return False
 
+            self.log_msg("   (2/4) Sewing(봉제) — 가장 오래 걸리는 단계일 수 있음...")
+            t_sew = time.time()
             sewing = BRepBuilderAPI_Sewing(0.1)
             sewing.Add(shape)
             sewing.Perform()
             sewn = sewing.SewedShape()
+            self.log_msg(f"      sewing 완료 ({time.time() - t_sew:.1f}s)")
 
             result = sewn
+            self.log_msg("   (3/4) Shell → Solid 시도...")
             try:
                 explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
                 if explorer.More():
@@ -196,14 +244,18 @@ class GyroidApp:
                     maker = BRepBuilderAPI_MakeSolid(shell)
                     if maker.IsDone():
                         result = maker.Solid()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.log_msg(f"      Solid화 생략(셸 유지): {exc}")
 
+            self.log_msg("   (4/4) STEP 파일 쓰기...")
+            t_w = time.time()
             writer = STEPControl_Writer()
             Interface_Static.SetCVal_s("write.step.schema", "AP214")
             writer.Transfer(result, STEPControl_AsIs)
             status = writer.Write(step_abs)
-            if status == 1:
+            self.log_msg(f"      write 호출 완료 ({time.time() - t_w:.1f}s), status={status}")
+
+            if status == 1 and os.path.isfile(step_abs):
                 size_mb = os.path.getsize(step_abs) / 1024 / 1024
                 self.log_msg(f"✅ STEP 저장: {step_abs} ({size_mb:.1f} MB)")
                 return True
@@ -212,6 +264,9 @@ class GyroidApp:
             return False
         except Exception as exc:
             self.log_msg(f"❌ STEP 변환 예외: {exc}")
+            import traceback
+
+            self.log_msg(traceback.format_exc())
             return False
 
     def do_generate(self) -> None:
@@ -219,21 +274,28 @@ class GyroidApp:
         t = float(self.t_var.get())
         res = int(self.res_var.get())
         include_duct = bool(self.duct_var.get())
+        use_z_buffer = bool(self.z_buffer_var.get())
 
         a = max(3.0, min(8.0, a))
         t = max(0.05, min(0.5, t))
         res = max(30, min(120, res))
 
-        self.root.after(0, lambda: self.a_var.set(a))
-        self.root.after(0, lambda: self.t_var.set(t))
-        self.root.after(0, lambda: self.res_var.set(res))
+        self._ui_vars(a, t, res)
 
-        self.log_msg(f"✅ 파라미터 확인: a={a} mm, t={t}, 해상도={res}, 외벽={include_duct}")
+        if use_z_buffer:
+            z_min, z_max = Z_BUFFER_MM, TOTAL_Z - Z_BUFFER_MM
+            z_note = f"z∈[{z_min},{z_max}]mm (버퍼 {Z_BUFFER_MM}mm)"
+        else:
+            z_min, z_max = 0.0, TOTAL_Z
+            z_note = f"z∈[0,{TOTAL_Z}]mm (버퍼 없음)"
+
+        self.log_msg(
+            f"✅ 파라미터: a={a} mm, t={t}, res={res}, 외벽={include_duct}, {z_note}"
+        )
         self.log_msg("🏗️ 형상 생성 시작...")
         t0 = time.time()
 
         x_min, x_max = WALL, DUCT_OUTER - WALL
-        z_min, z_max = MAIN_START, MAIN_END
         nx = max(20, int((x_max - x_min) / a * res))
         ny = nx
         nz = max(20, int((z_max - z_min) / a * res))
@@ -284,7 +346,8 @@ class GyroidApp:
 
         a_str = f"{a:.1f}".replace(".", "")
         t_str = f"{t:.2f}"[2:]
-        base_name = f"gyroid_a{a_str}_t{t_str}"
+        buf_tag = "buf" if use_z_buffer else "fullz"
+        base_name = f"gyroid_a{a_str}_t{t_str}_{buf_tag}"
 
         stl_path = os.path.join(self.output_dir, f"{base_name}.stl")
         step_path = os.path.join(self.output_dir, f"{base_name}.step")
@@ -298,6 +361,15 @@ class GyroidApp:
             if not os.path.exists(stl_path):
                 combined.export(stl_path, file_type="stl")
                 self.log_msg("ℹ️ STEP 변환을 위해 STL 임시 저장")
+            # OCP가 STL을 다시 읽으므로 Python 쪽 대용량 메쉬 해제
+            try:
+                del combined
+                del gyroid_mesh
+                del verts, faces, phi, x_grid, y_grid, z_grid
+            except Exception:
+                pass
+            gc.collect()
+            self.log_msg("⏳ 메모리 정리 후 STEP 변환 진행...")
             self.convert_to_step(stl_path, step_path)
 
         self.log_msg("🎉 완료!")

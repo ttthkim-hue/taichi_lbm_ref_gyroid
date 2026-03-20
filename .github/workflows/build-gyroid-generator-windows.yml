@@ -1,5 +1,4 @@
-# GyroidGenerator — Windows PE (.exe), STL + STEP (cadquery/OCP 포함)
-# 산출물: Actions → Artifacts → GyroidGenerator-windows.zip
+# GyroidGenerator — (1) Ubuntu 문법 검증 (2) Windows exe + OCP/STEP
 
 name: Build GyroidGenerator (Windows exe)
 
@@ -12,7 +11,18 @@ on:
       - ".github/workflows/build-gyroid-generator-windows.yml"
 
 jobs:
+  verify-python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check gyroid_gui.py
+        run: python3 -m py_compile geometry_exchange_ansys/exe_file_final/gyroid_generator/gyroid_gui.py
+
   pyinstaller-windows:
+    needs: verify-python-syntax
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
