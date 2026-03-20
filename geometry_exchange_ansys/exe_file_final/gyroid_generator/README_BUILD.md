@@ -25,12 +25,9 @@
 4. 성공 시 출력:
    - `dist\GyroidGenerator.exe` ← **이 파일이 진짜 Windows용**
 
-5. **STEP 변환**까지 exe에 넣으려면 `build_windows.bat` 안의 다음 줄 주석을 해제 후 재실행:
-   ```bat
-   pip install cadquery
-   ```
-   - 용량이 크고, 환경에 따라 Visual C++ 재배포 패키지가 필요할 수 있습니다.
-   - STEP 없이 STL만 쓰면 `cadquery` 없이도 동작합니다.
+5. **STEP** 은 `cadquery`(OCP)가 빌드에 포함되어야 합니다. 현재 `build_windows.bat`은 **기본으로 `pip install cadquery`** 를 수행합니다.  
+   - 배포 exe 용량이 커집니다(OCCT DLL).  
+   - 실행 PC에 **Visual C++ 재배포 패키지(x64)** 가 없으면 설치가 필요할 수 있습니다.
 
 ---
 
@@ -50,7 +47,7 @@ pyinstaller --noconfirm GyroidGenerator.spec
 
 1. 이 저장소를 GitHub에 푸시합니다. (`geometry_exchange_ansys/.../gyroid_generator` 소스가 **커밋에 포함**되어 있어야 합니다.)
 2. GitHub에서 **Actions** 탭 → **Build GyroidGenerator (Windows exe)** 워크플로 선택.
-3. **Run workflow** 실행 (필요 시 `install_cadquery` 로 STEP 포함 빌드).
+3. **Run workflow** 실행 (워크플로에 **cadquery가 기본 포함**되어 STEP 지원).
 4. 완료 후 해당 실행(run) 하단 **Artifacts** → `GyroidGenerator-windows.zip` 다운로드 → 압축 해제 후 `GyroidGenerator.exe` 사용.
 
 워크플로 파일: `.github/workflows/build-gyroid-generator-windows.yml`  

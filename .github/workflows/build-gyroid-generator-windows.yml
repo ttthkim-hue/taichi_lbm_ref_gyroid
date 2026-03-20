@@ -1,16 +1,10 @@
-# GyroidGenerator — Windows PE (.exe) 빌드 (GitHub-hosted windows-latest)
-# 산출물: Actions 탭 → 해당 워크플로 실행 → Artifacts 에서 GyroidGenerator-windows.zip 다운로드
+# GyroidGenerator — Windows PE (.exe), STL + STEP (cadquery/OCP 포함)
+# 산출물: Actions → Artifacts → GyroidGenerator-windows.zip
 
 name: Build GyroidGenerator (Windows exe)
 
 on:
   workflow_dispatch:
-    inputs:
-      install_cadquery:
-        description: "cadquery 설치 (STEP 내장, 용량·시간 증가)"
-        required: false
-        default: false
-        type: boolean
   push:
     branches: [main, master]
     paths:
@@ -20,6 +14,7 @@ on:
 jobs:
   pyinstaller-windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -36,15 +31,10 @@ jobs:
           cache: pip
           cache-dependency-path: geometry_exchange_ansys/exe_file_final/gyroid_generator/requirements.txt
 
-      - name: Install dependencies
+      - name: Install dependencies (incl. cadquery for STEP/OCP)
         run: |
           python -m pip install --upgrade pip wheel setuptools
-          pip install numpy scipy scikit-image trimesh manifold3d pyinstaller
-
-      - name: Optional cadquery (STEP)
-        # workflow_dispatch에서만 inputs 사용; push 트리거 시에는 이 단계 건너뜀
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.install_cadquery }}
-        run: pip install cadquery
+          pip install numpy scipy scikit-image trimesh manifold3d pyinstaller cadquery
 
       - name: PyInstaller
         run: pyinstaller --noconfirm GyroidGenerator.spec

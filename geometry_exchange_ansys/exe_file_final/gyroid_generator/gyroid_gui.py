@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 import numpy as np
@@ -157,7 +158,7 @@ class GyroidApp:
             self.root.after(0, lambda: self._set_button_state(True))
 
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:
-        self.log_msg("🔄 STEP 변환 중...")
+        self.log_msg("🔄 STEP 변환 중 (OCP)...")
         try:
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
             from OCP.Interface import Interface_Static
@@ -166,45 +167,52 @@ class GyroidApp:
             from OCP.TopAbs import TopAbs_SHELL
             from OCP.TopoDS import TopoDS, TopoDS_Shape
             from OCP.TopExp import TopExp_Explorer
-        except ImportError:
-            self.log_msg("⚠️ cadquery/OCP 미설치: STEP 변환을 건너뜁니다.")
-            self.log_msg("   pip install cadquery 후 재실행하면 STEP 생성 가능")
-            self.log_msg("   대안: SpaceClaim에서 STL -> Convert to Solid -> STEP 저장")
+        except ImportError as exc:
+            self.log_msg(f"⚠️ OCP(cadquery) 없음 — STEP 생략: {exc}")
+            self.log_msg("   Windows exe는 cadquery 포함 빌드 필요 (GitHub Actions 최신 워크플로)")
+            self.log_msg("   대안: SpaceClaim에서 STL → Convert to Solid → STEP")
             return False
 
-        reader = StlAPI_Reader()
-        shape = TopoDS_Shape()
-        if not reader.Read(shape, stl_path):
-            self.log_msg("❌ STL 읽기 실패")
-            return False
+        stl_abs = str(Path(stl_path).resolve())
+        step_abs = str(Path(step_path).resolve())
 
-        sewing = BRepBuilderAPI_Sewing(0.1)
-        sewing.Add(shape)
-        sewing.Perform()
-        sewn = sewing.SewedShape()
-
-        result = sewn
         try:
-            explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
-            if explorer.More():
-                shell = TopoDS.Shell_s(explorer.Current())
-                maker = BRepBuilderAPI_MakeSolid(shell)
-                if maker.IsDone():
-                    result = maker.Solid()
-        except Exception:
-            pass
+            reader = StlAPI_Reader()
+            shape = TopoDS_Shape()
+            if not reader.Read(shape, stl_abs):
+                self.log_msg(f"❌ STL 읽기 실패: {stl_abs}")
+                return False
 
-        writer = STEPControl_Writer()
-        Interface_Static.SetCVal_s("write.step.schema", "AP214")
-        writer.Transfer(result, STEPControl_AsIs)
-        status = writer.Write(step_path)
-        if status == 1:
-            size_mb = os.path.getsize(step_path) / 1024 / 1024
-            self.log_msg(f"✅ STEP 저장: {step_path} ({size_mb:.1f} MB)")
-            return True
+            sewing = BRepBuilderAPI_Sewing(0.1)
+            sewing.Add(shape)
+            sewing.Perform()
+            sewn = sewing.SewedShape()
 
-        self.log_msg("❌ STEP 저장 실패")
-        return False
+            result = sewn
+            try:
+                explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+                if explorer.More():
+                    shell = TopoDS.Shell_s(explorer.Current())
+                    maker = BRepBuilderAPI_MakeSolid(shell)
+                    if maker.IsDone():
+                        result = maker.Solid()
+            except Exception:
+                pass
+
+            writer = STEPControl_Writer()
+            Interface_Static.SetCVal_s("write.step.schema", "AP214")
+            writer.Transfer(result, STEPControl_AsIs)
+            status = writer.Write(step_abs)
+            if status == 1:
+                size_mb = os.path.getsize(step_abs) / 1024 / 1024
+                self.log_msg(f"✅ STEP 저장: {step_abs} ({size_mb:.1f} MB)")
+                return True
+
+            self.log_msg(f"❌ STEP 저장 실패 (status={status})")
+            return False
+        except Exception as exc:
+            self.log_msg(f"❌ STEP 변환 예외: {exc}")
+            return False
 
     def do_generate(self) -> None:
         a = float(self.a_var.get())

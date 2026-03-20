@@ -33,12 +33,8 @@ call ".venv_win\Scripts\activate.bat" || exit /b 1
 python -m pip install --upgrade pip wheel setuptools || exit /b 1
 
 echo.
-echo [1/2] 필수 패키지 설치 (STL + GUI) ...
-pip install numpy scipy scikit-image trimesh manifold3d pyinstaller || exit /b 1
-
-echo.
-echo [선택] STEP 출력에 cadquery/OCP가 필요하면 아래 줄의 주석을 제거한 뒤 다시 실행하세요.
-REM pip install cadquery
+echo [1/2] 패키지 설치 (STL + STEP: cadquery/OCP 포함) ...
+pip install numpy scipy scikit-image trimesh manifold3d pyinstaller cadquery || exit /b 1
 
 echo.
 echo [2/2] PyInstaller 빌드 ...
