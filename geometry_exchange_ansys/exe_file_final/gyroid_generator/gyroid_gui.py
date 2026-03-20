@@ -295,14 +295,13 @@ class GyroidApp:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                bufsize=0,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
 
-            # 실시간 로그 읽기
-            for line in proc.stdout:
-                line = line.rstrip()
+            # 실시간 로그 읽기 (바이너리 → UTF-8, 디코딩 오류 무시)
+            for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
                 if line:
                     self.log_msg(f"   {line}")
 
