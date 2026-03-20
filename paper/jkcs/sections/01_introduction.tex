@@ -1,0 +1,49 @@
+\section{Introduction}\label{sec:intro}
+
+Catalytic converters in automotive exhaust systems and industrial reactors
+rely on porous support structures that must simultaneously provide
+high catalytic surface area and low flow resistance.
+Conventional honeycomb monoliths, while widely adopted, suffer from
+limited radial mixing and anisotropic transport properties~\cite{ref_honeycomb}.
+
+Triply periodic minimal surface (TPMS) structures have emerged as
+promising alternatives owing to their mathematically defined,
+fully interconnected pore networks~\cite{ref_tpms_review}.
+Among TPMS families, the gyroid---described by the level-set function
+\begin{equation}\label{eq:gyroid}
+  \varphi(\mathbf{x}) =
+    \sin\!\frac{2\pi x}{a}\cos\!\frac{2\pi y}{a}
+  + \sin\!\frac{2\pi y}{a}\cos\!\frac{2\pi z}{a}
+  + \sin\!\frac{2\pi z}{a}\cos\!\frac{2\pi x}{a}
+  = t,
+\end{equation}
+where $a$ is the unit-cell size and $t$ the threshold parameter---has
+attracted particular interest because of its zero mean curvature,
+tunable porosity $\varepsilon$, and feasibility of fabrication via
+additive manufacturing of ceramics~\cite{ref_gyroid_ceramic}.
+
+The design of gyroid-based catalyst supports involves a trade-off
+between specific surface area $S_v$ and pressure drop $\Delta P$.
+Increasing $S_v$ enhances catalytic activity but raises flow resistance.
+Bayesian optimization (BO) provides a sample-efficient strategy for
+navigating such trade-offs when each function evaluation is
+computationally expensive~\cite{ref_bo_review}.
+
+The lattice Boltzmann method (LBM) is well-suited for simulating
+flow through complex porous geometries due to its inherent parallelism
+and straightforward handling of irregular boundaries~\cite{ref_lbm_porous}.
+In this work, we couple a D3Q19 multiple-relaxation-time (MRT) LBM solver,
+implemented on GPU via the Taichi programming framework~\cite{ref_taichi},
+with a BO pipeline to systematically explore the $(a, t)$ design space
+of gyroid catalyst supports.
+
+The objectives of this study are:
+\begin{enumerate}
+  \item To establish a validated, GPU-accelerated LBM simulation framework
+        for gyroid TPMS permeability evaluation;
+  \item To identify Pareto-optimal designs that balance $S_v$ and $\Delta P$
+        using BO with 100 evaluations;
+  \item To characterize the selected designs in terms of Forchheimer
+        nonlinear behavior, GHSV-dependent pressure loss, and flow
+        mixing metrics.
+\end{enumerate}

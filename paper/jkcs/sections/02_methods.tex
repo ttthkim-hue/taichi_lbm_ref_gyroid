@@ -1,0 +1,100 @@
+\section{Methods}\label{sec:methods}
+
+\subsection{Gyroid Geometry}\label{sec:geom}
+
+The gyroid surface is defined by Eq.~\eqref{eq:gyroid}.
+The solid phase occupies the region $\varphi(\mathbf{x}) \ge t$,
+where $t \in (-0.5,\; 0.5)$ controls wall thickness and porosity
+$\varepsilon$.  The unit-cell size $a$ determines the characteristic
+pore dimension.  For each $(a, t)$ pair, the voxelized domain is
+constructed on a Cartesian grid with resolution $\Delta x = \SI{0.2}{\milli\meter}$,
+yielding $N_x = N_y = 131$ and $N_z = 2a/\Delta x$.
+
+The specific surface area $S_v$ (surface area per unit volume, \si{\per\meter})
+and porosity $\varepsilon$ are computed directly from the voxelized geometry.
+
+\subsection{Lattice Boltzmann Solver}\label{sec:lbm}
+
+A D3Q19 MRT-LBM scheme is employed~\cite{ref_mrt_lbm}.
+The solver is implemented in Taichi (v1.7.4) with CUDA backend.
+Key simulation parameters are listed in Table~\ref{tab:lbm_params}.
+
+\begin{table}[htbp]
+\caption{LBM simulation parameters.}\label{tab:lbm_params}
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+Parameter & Symbol & Value \\
+\midrule
+Lattice & --- & D3Q19 \\
+Collision model & --- & MRT \\
+Grid resolution & $\Delta x$ & \SI{0.2}{\milli\meter} \\
+Domain (cross-section) & $N_x \times N_y$ & $131 \times 131$ \\
+Domain (streamwise) & $N_z$ & $2a/\Delta x$ \\
+Boundary condition & --- & Periodic + body force \\
+Framework & --- & Taichi 1.7.4, \texttt{arch=cuda} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The no-slip condition at solid walls is enforced via the bounce-back scheme.
+Periodic boundary conditions are applied in the streamwise ($z$) direction,
+and a uniform body force $g_\mathrm{lbm}$ drives the flow.
+Darcy permeability is obtained from the steady-state velocity field:
+\begin{equation}\label{eq:darcy}
+  K = \frac{\mu \, \langle u_z \rangle}{(\Delta P / L)},
+\end{equation}
+where $\mu$ is the dynamic viscosity, $\langle u_z \rangle$ the
+volume-averaged streamwise velocity, and $L$ the domain length.
+
+\subsection{Bayesian Optimization}\label{sec:bo}
+
+The BO framework uses Gaussian process regression with the
+Lower Confidence Bound (LCB) acquisition function
+($\kappa = 3$)~\cite{ref_bo_lcb}, implemented via
+\texttt{scikit-optimize}.  The design space is:
+
+\begin{table}[htbp]
+\caption{Bayesian optimization configuration.}\label{tab:bo_config}
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+Parameter & Value \\
+\midrule
+Design variable $a$ & $[\num{3.0},\; \num{12.0}]$ \si{\milli\meter} \\
+Design variable $t$ & $(-0.5,\; 0.5)$ \\
+Acquisition function & LCB, $\kappa = 3$ \\
+Initial samples & 20 (random) \\
+Iterations & 80 \\
+Total evaluations & 100 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The objective is to minimize $\Delta P_\mathrm{Darcy}$
+while simultaneously maximizing $S_v$.
+A design is marked \emph{feasible} if the simulation converges
+and satisfies physical consistency checks.
+
+\subsection{Post-processing}\label{sec:postproc}
+
+\paragraph{Forchheimer analysis.}
+For the top-5 designs, five body-force levels
+($g_\mathrm{lbm} \in \{10^{-6},\; 5{\times}10^{-6},\; 5{\times}10^{-5},\;
+5{\times}10^{-4},\; 2{\times}10^{-3}\}$) are applied.
+The extended Darcy--Forchheimer equation,
+\begin{equation}\label{eq:forch}
+  \frac{\Delta P / L}{u} = \frac{\mu}{K} + \beta\,\rho\,u,
+\end{equation}
+is fitted via linear regression of $(\Delta P/L)/u$ versus $u$
+to extract permeability $K$ and inertial coefficient $\beta$.
+
+\paragraph{Flow metrics.}
+Mixing ratio ($v_\mathrm{trans}/|v_z|$), velocity uniformity
+($\sigma_{v_z}$), and hydraulic tortuosity $\tau$ are evaluated
+at the mid-plane cross-section.
+
+\paragraph{GHSV sweep.}
+Pressure drop at five gas hourly space velocities
+(GHSV $= 5000$--$\num{60000}\;\si{\per\hour}$) is computed
+from the Darcy relation $\Delta P = u_\mathrm{in}\,\mu\,L_\mathrm{cat}/K$.

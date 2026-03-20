@@ -1,0 +1,79 @@
+% main.tex — JKCS (Journal of the Korean Ceramic Society) submission
+% Springer Nature sn-jnl template
+% NOTE: Switch to sn-jnl class when the correct version is available.
+%       Current build uses article class for compatibility.
+\documentclass[12pt,a4paper]{article}
+
+%%% Packages %%%
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue]{hyperref}
+\usepackage[margin=25mm]{geometry}
+
+%%% SI units setup %%%
+\sisetup{
+  per-mode=symbol,
+  inter-unit-product=\ensuremath{\cdot},
+}
+
+\begin{document}
+
+\title{Bayesian Optimization of Gyroid TPMS Catalyst Support Geometry
+  for Pressure Drop and Surface Area Using Lattice Boltzmann Method}
+
+\author{Hyun-Kyu Tae\footnote{Corresponding author. E-mail: thk@example.com} \\
+  \small Affiliation TBD, Republic of Korea}
+
+\date{}
+\maketitle
+
+\begin{abstract}
+Triply periodic minimal surface (TPMS) structures, particularly the gyroid,
+have attracted attention as catalyst supports due to their high surface-area-to-volume
+ratio and tunable porosity. In this study, we apply Bayesian optimization (BO)
+to the design of gyroid catalyst supports, exploring the unit-cell size $a$
+and threshold parameter $t$ to balance specific surface area $S_v$ against
+pressure drop $\Delta P$. A D3Q19 multiple-relaxation-time lattice Boltzmann
+method (MRT-LBM) solver implemented in Taichi is used to evaluate
+Darcy permeability $K$ for each candidate geometry. One hundred BO evaluations
+yield 50 Pareto-optimal designs, from which five representative configurations
+(A--E) are selected for detailed characterization, including GHSV-dependent
+pressure loss, Forchheimer nonlinear regression, flow mixing metrics,
+and numerical reproducibility analysis.  Results show that designs with
+$a = 3$--$\SI{6}{\milli\meter}$ achieve $S_v > \SI{2000}{\per\meter}$
+while maintaining $\Delta P < \SI{50}{\pascal}$ at the reference GHSV,
+offering practical trade-offs for ceramic catalyst support applications.
+\end{abstract}
+
+\noindent\textbf{Keywords:} Gyroid; TPMS; Lattice Boltzmann method;
+Bayesian optimization; Catalyst support; Permeability
+
+\input{sections/01_introduction}
+\input{sections/02_methods}
+\input{sections/03_results}
+\input{sections/04_discussion}
+\input{sections/05_conclusion}
+
+\section*{Data Availability}
+The simulation code, input parameters, and result datasets used in this study
+are available at the project repository upon reasonable request.
+
+\section*{Declarations}
+
+\begin{itemize}
+\item \textbf{Conflict of interest:} The authors declare no conflict of interest.
+\item \textbf{Author contributions:} H.-K.\ Tae conceived the study, developed
+  the LBM solver and BO pipeline, performed simulations, and wrote the manuscript.
+\end{itemize}
+
+\section*{Acknowledgements}
+The authors thank the contributors of the Taichi programming framework
+and the scikit-optimize library.
+
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\end{document}

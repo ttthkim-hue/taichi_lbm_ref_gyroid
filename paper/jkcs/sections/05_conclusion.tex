@@ -1,0 +1,35 @@
+\section{Conclusion}\label{sec:conclusion}
+
+A GPU-accelerated D3Q19 MRT lattice Boltzmann solver coupled with
+Bayesian optimization was applied to the design of gyroid TPMS
+catalyst supports.  The main findings are:
+
+\begin{enumerate}
+  \item \textbf{Efficient design-space exploration:}
+    100 BO evaluations (85 feasible) produced 50 Pareto-optimal
+    designs in the $S_v$--$\Delta P$ space, spanning
+    $a = \SIrange{3}{12}{\milli\meter}$ and $t \in (-0.5, 0.5)$.
+
+  \item \textbf{Design selection:}
+    Five representative designs were identified.
+    Design~E ($a = \SI{5.17}{\milli\meter}$, $\varepsilon = 0.44$,
+    $S_v = \SI{2252}{\per\meter}$, $\Delta P = \SI{20}{\pascal}$)
+    offers the best balance of catalytic surface area, flow resistance,
+    and manufacturability.
+
+  \item \textbf{Forchheimer characterization:}
+    Inertial coefficients $\beta \sim \SIrange{2000}{2900}{\per\meter}$
+    were reliably extracted for four of five designs ($R^2 > 0.96$).
+    The high-permeability design~B exceeded the solver's
+    compressibility limit at elevated body forces.
+
+  \item \textbf{Deterministic reproducibility:}
+    The GPU-based solver demonstrated CV $< 10^{-13}\%$
+    across triplicate runs, ensuring numerical consistency.
+\end{enumerate}
+
+Future work will address grid-independence studies at finer resolutions,
+experimental validation with 3D-printed ceramic gyroid specimens,
+and extension of the BO framework to include thermal performance metrics.
+
+% Acknowledgements moved to main.tex

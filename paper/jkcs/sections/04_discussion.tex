@@ -1,0 +1,40 @@
+\section{Discussion}\label{sec:discussion}
+
+\subsection{Design Trade-offs}\label{sec:tradeoffs}
+
+The Pareto front (Fig.~\ref{fig:pareto}) reveals a clear trade-off
+between specific surface area and pressure drop.
+Designs with small unit cells ($a \le \SI{5}{\milli\meter}$) achieve
+$S_v > \SI{2000}{\per\meter}$ but incur higher $\Delta P$,
+while large unit cells ($a \ge \SI{10}{\milli\meter}$) minimize
+flow resistance at the cost of reduced catalytic surface area.
+
+Design~E ($a = \SI{5.17}{\milli\meter}$, $t = 0.183$) represents
+a practical compromise: $S_v = \SI{2252}{\per\meter}$ with
+$\Delta P = \SI{20}{\pascal}$ at the reference GHSV,
+and a unit-cell size compatible with current ceramic
+additive manufacturing resolution~\cite{ref_ceramic_am}.
+
+\subsection{Limitations of the Forchheimer Analysis}\label{sec:forch_limits}
+
+The body-force sweep for design~B (large unit cell, high permeability)
+produced Mach numbers exceeding 0.1 at the two highest force levels,
+violating the low-Mach-number assumption of the LBM.
+The resulting regression ($R^2 = 0.37$) is therefore unreliable.
+For designs A, C, D, and E, the $R^2$ values (0.965--0.981) are
+below the initially targeted 0.99, which can be attributed to the
+inclusion of transitional-regime data points.
+A restricted regression using only sub-points with $\mathrm{Ma} < 0.05$
+would likely improve the fit quality and is recommended for future work.
+
+\subsection{Practical Implications for Ceramic Supports}\label{sec:practical}
+
+For typical automotive catalyst conditions
+(GHSV $= \num{10000}$--$\SI{40000}{\per\hour}$, $T = \SI{200}{\celsius}$),
+designs C and E maintain $\Delta P$ below \SI{100}{\pascal} while
+providing $S_v > \SI{2000}{\per\meter}$.
+These parameters are competitive with conventional cordierite
+honeycomb monoliths ($S_v \sim \SI{2500}{\per\meter}$,
+$\Delta P \sim \SI{50}{\pascal}$) with the added advantage of
+enhanced radial mixing ($\text{mixing ratio} > 0.7$)
+and isotropic transport properties inherent to the gyroid topology.
