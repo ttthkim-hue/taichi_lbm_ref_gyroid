@@ -26,12 +26,15 @@
 
 ### 2) 이 폴더에서 푸시 (처음 한 번)
 
+**이미 로컬에서 `git init` + 첫 커밋이 되어 있을 수 있습니다.**  
+(`git status` 가 “nothing to commit, working tree clean” 이면 바로 remote 추가·푸시만 하면 됩니다.)
+
 터미널에서:
 
 ```bash
 cd /mnt/h/taichi_lbm_ref_gyroid
 
-# 아직 안 했다면 (이 저장소에서 이미 실행했다면 생략)
+# 저장소가 없을 때만
 git init
 git add -A
 git commit -m "chore: initial + GyroidGenerator Windows CI"
