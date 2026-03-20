@@ -5,7 +5,14 @@ stdout에 진행 상황 출력 (메인 GUI가 읽음).
 """
 import os
 import sys
+import threading
 import time
+
+
+def _estimate_sewing_sec(n_faces: int) -> float:
+    """면 수 기반 sewing 예상 시간 (초). CI 벤치마크: 12K면=5s."""
+    # sewing은 대략 O(n^1.3) ~ O(n^1.5) 스케일링
+    return 5.0 * (n_faces / 12000) ** 1.4
 
 
 def main():
@@ -19,6 +26,11 @@ def main():
     if not os.path.isfile(stl_path):
         print(f"[ERROR] STL not found: {stl_path}")
         sys.exit(1)
+
+    # STL 파일 크기로 면 수 추정 (binary STL: 80 header + 4 bytes + 50 bytes/face)
+    stl_size = os.path.getsize(stl_path)
+    est_faces = max(1, (stl_size - 84) // 50)
+    est_sec = _estimate_sewing_sec(est_faces)
 
     print("[INFO] OCP 모듈 로딩 중...")
     sys.stdout.flush()
@@ -41,20 +53,38 @@ def main():
     reader = StlAPI_Reader()
     shape = TopoDS_Shape()
     if not reader.Read(shape, stl_path):
-        print(f"[ERROR] STL 읽기 실패")
+        print("[ERROR] STL 읽기 실패")
         sys.exit(1)
     print(f"[OK] STL 로드 완료 (null={shape.IsNull()})")
     sys.stdout.flush()
 
-    print("[INFO] (2/4) Sewing 중...")
+    # ── Sewing을 스레드에서 실행, 메인 스레드가 경과시간 출력 ──
+    print(f"[INFO] (2/4) Sewing 시작 (~{est_faces:,}면, 예상 {est_sec:.0f}초)...")
     sys.stdout.flush()
-    t0 = time.time()
+
     sewing = BRepBuilderAPI_Sewing(0.1)
     sewing.SetNonManifoldMode(True)
     sewing.Add(shape)
-    sewing.Perform()
+
+    sew_done = threading.Event()
+    t0 = time.time()
+
+    def _do_sew():
+        sewing.Perform()
+        sew_done.set()
+
+    threading.Thread(target=_do_sew, daemon=True).start()
+
+    # 3초마다 경과시간 출력
+    while not sew_done.wait(timeout=3.0):
+        elapsed = time.time() - t0
+        pct = min(99, int(elapsed / max(est_sec, 1) * 100))
+        print(f"[SEWING] {elapsed:.0f}s 경과 / 예상 ~{est_sec:.0f}s ({pct}%)")
+        sys.stdout.flush()
+
+    elapsed = time.time() - t0
     sewn = sewing.SewedShape()
-    print(f"[OK] Sewing 완료 ({time.time() - t0:.1f}s, null={sewn.IsNull()})")
+    print(f"[OK] Sewing 완료 ({elapsed:.1f}s, null={sewn.IsNull()})")
     sys.stdout.flush()
 
     if sewn.IsNull():
