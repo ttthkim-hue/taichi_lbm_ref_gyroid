@@ -200,6 +200,20 @@ class GyroidApp:
         finally:
             self._ui_btn(True)
 
+    @staticmethod
+    def _clean_mesh(mesh: "trimesh.Trimesh") -> "trimesh.Trimesh":
+        """STEP 변환 전 메시 전처리 — 법선 수정, 퇴화 면 제거, 정점 병합."""
+        trimesh.repair.fix_normals(mesh)
+        trimesh.repair.fix_winding(mesh)
+        # 퇴화 삼각형(면적 0) 제거
+        valid = mesh.area_faces > 0
+        if not valid.all():
+            mesh.update_faces(valid)
+        mesh.merge_vertices()
+        mesh.remove_duplicate_faces()
+        mesh.remove_unreferenced_vertices()
+        return mesh
+
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:
         self.log_msg("🔄 STEP 변환 시작 (OCP) — 면이 많으면 수 분 이상 걸릴 수 있습니다.")
         try:
@@ -220,23 +234,41 @@ class GyroidApp:
         step_abs = str(Path(step_path).resolve())
 
         try:
-            self.log_msg("   (1/4) STL 파일 로드 (OCP Reader)...")
+            self.log_msg("   (1/5) STL 파일 로드 (OCP Reader)...")
             reader = StlAPI_Reader()
             shape = TopoDS_Shape()
+            reader.SetASCIIMode(False)
             if not reader.Read(shape, stl_abs):
                 self.log_msg(f"❌ STL 읽기 실패: {stl_abs}")
                 return False
+            self.log_msg(f"      STL 로드 완료 — null={shape.IsNull()}")
 
-            self.log_msg("   (2/4) Sewing(봉제) — 가장 오래 걸리는 단계일 수 있음...")
-            t_sew = time.time()
-            sewing = BRepBuilderAPI_Sewing(0.1)
-            sewing.Add(shape)
-            sewing.Perform()
-            sewn = sewing.SewedShape()
-            self.log_msg(f"      sewing 완료 ({time.time() - t_sew:.1f}s)")
+            # 적응형 Sewing: 작은 허용치부터 시도, 실패 시 확대
+            sewn = None
+            tolerances = [0.01, 0.1, 1.0]
+            for tol in tolerances:
+                self.log_msg(f"   (2/5) Sewing (허용치={tol}mm)...")
+                t_sew = time.time()
+                try:
+                    sewing = BRepBuilderAPI_Sewing(tol)
+                    sewing.SetNonManifoldMode(True)
+                    sewing.Add(shape)
+                    sewing.Perform()
+                    sewn = sewing.SewedShape()
+                    elapsed_sew = time.time() - t_sew
+                    self.log_msg(f"      sewing 완료 ({elapsed_sew:.1f}s), null={sewn.IsNull()}")
+                    if not sewn.IsNull():
+                        break
+                except Exception as exc_sew:
+                    self.log_msg(f"      sewing 실패 (tol={tol}): {exc_sew}")
+                    continue
+
+            if sewn is None or sewn.IsNull():
+                self.log_msg("❌ 모든 Sewing 허용치에서 실패")
+                return False
 
             result = sewn
-            self.log_msg("   (3/4) Shell → Solid 시도...")
+            self.log_msg("   (3/5) Shell → Solid 시도...")
             try:
                 explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
                 if explorer.More():
@@ -244,23 +276,33 @@ class GyroidApp:
                     maker = BRepBuilderAPI_MakeSolid(shell)
                     if maker.IsDone():
                         result = maker.Solid()
+                        self.log_msg("      Solid 변환 성공")
+                    else:
+                        self.log_msg("      Solid 변환 실패 → Shell로 진행")
+                else:
+                    self.log_msg("      Shell 없음 → sewn shape 그대로 진행")
             except Exception as exc:
                 self.log_msg(f"      Solid화 생략(셸 유지): {exc}")
 
-            self.log_msg("   (4/4) STEP 파일 쓰기...")
+            self.log_msg("   (4/5) STEP 파일 쓰기 (AP214)...")
             t_w = time.time()
             writer = STEPControl_Writer()
             Interface_Static.SetCVal_s("write.step.schema", "AP214")
-            writer.Transfer(result, STEPControl_AsIs)
-            status = writer.Write(step_abs)
-            self.log_msg(f"      write 호출 완료 ({time.time() - t_w:.1f}s), status={status}")
+            tr_status = writer.Transfer(result, STEPControl_AsIs)
+            self.log_msg(f"      Transfer 완료, status={tr_status}")
+            wr_status = writer.Write(step_abs)
+            self.log_msg(f"      Write 완료 ({time.time() - t_w:.1f}s), status={wr_status}")
 
-            if status == 1 and os.path.isfile(step_abs):
+            if wr_status == 1 and os.path.isfile(step_abs):
                 size_mb = os.path.getsize(step_abs) / 1024 / 1024
+                if size_mb < 0.001:
+                    self.log_msg(f"⚠️ STEP 파일이 비정상적으로 작음 ({size_mb:.4f} MB) — 내용 확인 필요")
+                else:
+                    self.log_msg(f"   (5/5) 검증 — 파일 크기 {size_mb:.1f} MB")
                 self.log_msg(f"✅ STEP 저장: {step_abs} ({size_mb:.1f} MB)")
                 return True
 
-            self.log_msg(f"❌ STEP 저장 실패 (status={status})")
+            self.log_msg(f"❌ STEP 저장 실패 (write_status={wr_status})")
             return False
         except Exception as exc:
             self.log_msg(f"❌ STEP 변환 예외: {exc}")
@@ -351,6 +393,12 @@ class GyroidApp:
 
         stl_path = os.path.join(self.output_dir, f"{base_name}.stl")
         step_path = os.path.join(self.output_dir, f"{base_name}.step")
+
+        # STEP 변환이 필요하면 메시 전처리 수행 (STL 품질 향상)
+        if self.step_var.get():
+            self.log_msg("🔧 STEP 변환을 위한 메시 전처리 중...")
+            combined = self._clean_mesh(combined)
+            self.log_msg(f"   전처리 후 면 수: {len(combined.faces):,}")
 
         if self.stl_var.get():
             combined.export(stl_path, file_type="stl")
