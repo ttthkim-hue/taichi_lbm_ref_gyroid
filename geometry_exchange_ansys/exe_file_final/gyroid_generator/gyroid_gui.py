@@ -210,8 +210,9 @@ class GyroidApp:
         if not valid.all():
             mesh.update_faces(valid)
         mesh.merge_vertices()
-        mesh.remove_duplicate_faces()
         mesh.remove_unreferenced_vertices()
+        # 중복 면 제거 (unique_faces)
+        mesh.process(validate=True)
         return mesh
 
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:

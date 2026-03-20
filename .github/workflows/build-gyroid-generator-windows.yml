@@ -85,8 +85,8 @@ jobs:
           trimesh.repair.fix_normals(mesh)
           trimesh.repair.fix_winding(mesh)
           mesh.merge_vertices()
-          mesh.remove_duplicate_faces()
           mesh.remove_unreferenced_vertices()
+          mesh.process(validate=True)
 
           stl_path = 'ci_test.stl'
           mesh.export(stl_path, file_type='stl')
