@@ -238,7 +238,7 @@ class GyroidApp:
             self.log_msg("   (1/5) STL 파일 로드 (OCP Reader)...")
             reader = StlAPI_Reader()
             shape = TopoDS_Shape()
-            reader.SetASCIIMode(False)
+
             if not reader.Read(shape, stl_abs):
                 self.log_msg(f"❌ STL 읽기 실패: {stl_abs}")
                 return False

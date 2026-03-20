@@ -95,7 +95,7 @@ jobs:
           # 3) STL -> STEP conversion
           reader = StlAPI_Reader()
           shape = TopoDS_Shape()
-          reader.SetASCIIMode(False)
+
           if not reader.Read(shape, os.path.abspath(stl_path)):
               print('[FAIL] OCP StlAPI_Reader failed'); sys.exit(1)
           print(f'[PASS] STL loaded into OCP, null={shape.IsNull()}')
