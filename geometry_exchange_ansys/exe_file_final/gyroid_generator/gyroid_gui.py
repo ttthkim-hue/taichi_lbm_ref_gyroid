@@ -28,7 +28,7 @@ class GyroidApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Gyroid Catalyst Support - STEP Generator")
-        self.root.geometry("620x900")
+        self.root.geometry("620x920")
         self.root.resizable(False, False)
 
         self.log_queue: queue.Queue[str] = queue.Queue()
@@ -38,6 +38,7 @@ class GyroidApp:
         self.a_var = tk.DoubleVar(value=5.0)
         self.t_var = tk.DoubleVar(value=0.3)
         self.res_var = tk.IntVar(value=60)
+        self.step_res_var = tk.IntVar(value=8)
         self.duct_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
         self.step_var = tk.BooleanVar(value=True)
@@ -66,27 +67,35 @@ class GyroidApp:
             row=3, column=0, columnspan=2, sticky="w"
         )
 
-        ttk.Label(param_frame, text="해상도 (res):").grid(row=4, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(param_frame, text="STL 해상도 (res):").grid(row=4, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(param_frame, textvariable=self.res_var, width=12).grid(row=4, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(param_frame, text="30=빠름, 60=기본, 120=고품질", foreground="gray").grid(
+        ttk.Label(param_frame, text="30=빠름, 60=기본, 120=고품질 (STL 전용)", foreground="gray").grid(
             row=5, column=0, columnspan=2, sticky="w"
         )
 
+        ttk.Label(param_frame, text="STEP 해상도:").grid(row=6, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(param_frame, textvariable=self.step_res_var, width=12).grid(row=6, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(
+            param_frame,
+            text="5=빠름(~1분), 8=기본(~2분), 15=고품질(느림) — STEP 전용",
+            foreground="gray",
+        ).grid(row=7, column=0, columnspan=2, sticky="w")
+
         ttk.Checkbutton(param_frame, text="외벽 포함 (1.0mm)", variable=self.duct_var).grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(8, 0)
+            row=8, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
 
         ttk.Checkbutton(
             param_frame,
             text="Z 방향 앞·뒤 5mm 버퍼 (Gyroid 도메인을 z=5~105mm로 제한)",
             variable=self.z_buffer_var,
-        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(
             param_frame,
             text="끄면 z=0~110mm 전체 높이에 Gyroid 생성 (덕트 외벽 옵션과 별개)",
             foreground="gray",
             font=("TkDefaultFont", 8),
-        ).grid(row=8, column=0, columnspan=2, sticky="w")
+        ).grid(row=10, column=0, columnspan=2, sticky="w")
 
         out_frame = ttk.LabelFrame(main, text="출력 설정", padding=10)
         out_frame.pack(fill="x", padx=4, pady=4)
@@ -94,7 +103,7 @@ class GyroidApp:
         ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
         ttk.Label(
             out_frame,
-            text="※ STEP은 STL보다 오래 걸립니다. 면 수가 많으면 수 분~10분 이상일 수 있습니다.",
+            text="※ STEP은 낮은 해상도로 별도 생성됩니다 (형상 동일, Sewing 속도 확보)",
             foreground="gray",
             font=("TkDefaultFont", 8),
         ).pack(anchor="w", pady=(4, 0))
@@ -155,11 +164,6 @@ class GyroidApp:
                 cmd = self.ui_queue.get_nowait()
                 if cmd[0] == "btn":
                     self._set_button_state(cmd[1])
-                elif cmd[0] == "vars":
-                    a, t, res = cmd[1], cmd[2], cmd[3]
-                    self.a_var.set(a)
-                    self.t_var.set(t)
-                    self.res_var.set(res)
         except queue.Empty:
             pass
         try:
@@ -176,9 +180,6 @@ class GyroidApp:
     def _ui_btn(self, enabled: bool) -> None:
         self.ui_queue.put(("btn", enabled))
 
-    def _ui_vars(self, a: float, t: float, res: int) -> None:
-        self.ui_queue.put(("vars", a, t, res))
-
     def _set_button_state(self, enabled: bool) -> None:
         self.btn.config(state=("normal" if enabled else "disabled"))
 
@@ -193,174 +194,25 @@ class GyroidApp:
         try:
             self.do_generate()
         except Exception as exc:
-            self.log_msg(f"❌ 오류: {exc}")
+            self.log_msg(f"오류: {exc}")
             import traceback
 
             self.log_msg(traceback.format_exc())
         finally:
             self._ui_btn(True)
 
-    STEP_MAX_FACES = 50_000  # Sewing은 O(n^2) 이상 — 이 이상이면 decimation 필수
+    # ── 자이로이드 메시 생성 (공통 로직) ──────────────────────────
 
-    @staticmethod
-    def _clean_mesh(mesh: "trimesh.Trimesh", log_fn=None) -> "trimesh.Trimesh":
-        """STEP 변환 전 메시 전처리 — 법선 수정, 퇴화 면 제거, 정점 병합, decimation."""
-        trimesh.repair.fix_normals(mesh)
-        trimesh.repair.fix_winding(mesh)
-        # 퇴화 삼각형(면적 0) 제거
-        valid = mesh.area_faces > 0
-        if not valid.all():
-            mesh.update_faces(valid)
-        mesh.merge_vertices()
-        mesh.remove_unreferenced_vertices()
-        mesh.process(validate=True)
-
-        # Decimation: Sewing이 대면 수 메시에서 극도로 느려지므로 축소
-        n_faces = len(mesh.faces)
-        if n_faces > GyroidApp.STEP_MAX_FACES:
-            ratio = GyroidApp.STEP_MAX_FACES / n_faces
-            if log_fn:
-                log_fn(f"   Decimation: {n_faces:,} → ~{GyroidApp.STEP_MAX_FACES:,} 면 (비율 {ratio:.2f})")
-            try:
-                mesh = mesh.simplify_quadric_decimation(GyroidApp.STEP_MAX_FACES)
-                mesh.process(validate=True)
-                if log_fn:
-                    log_fn(f"   Decimation 완료: {len(mesh.faces):,} 면")
-            except Exception as exc:
-                if log_fn:
-                    log_fn(f"   ⚠️ Decimation 실패 ({exc}), 원본 메시로 진행")
-        return mesh
-
-    def convert_to_step(self, stl_path: str, step_path: str) -> bool:
-        self.log_msg("🔄 STEP 변환 시작 (OCP) — 면이 많으면 수 분 이상 걸릴 수 있습니다.")
-        try:
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
-            from OCP.Interface import Interface_Static
-            from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
-            from OCP.StlAPI import StlAPI_Reader
-            from OCP.TopAbs import TopAbs_SHELL
-            from OCP.TopoDS import TopoDS, TopoDS_Shape
-            from OCP.TopExp import TopExp_Explorer
-        except ImportError as exc:
-            self.log_msg(f"⚠️ OCP(cadquery) 없음 — STEP 생략: {exc}")
-            self.log_msg("   Windows exe는 cadquery 포함 빌드 필요 (GitHub Actions 최신 워크플로)")
-            self.log_msg("   대안: SpaceClaim에서 STL → Convert to Solid → STEP")
-            return False
-
-        stl_abs = str(Path(stl_path).resolve())
-        step_abs = str(Path(step_path).resolve())
-
-        try:
-            self.log_msg("   (1/5) STL 파일 로드 (OCP Reader)...")
-            reader = StlAPI_Reader()
-            shape = TopoDS_Shape()
-
-            if not reader.Read(shape, stl_abs):
-                self.log_msg(f"❌ STL 읽기 실패: {stl_abs}")
-                return False
-            self.log_msg(f"      STL 로드 완료 — null={shape.IsNull()}")
-
-            # 적응형 Sewing: 작은 허용치부터 시도, 실패 시 확대
-            sewn = None
-            tolerances = [0.01, 0.1, 1.0]
-            for tol in tolerances:
-                self.log_msg(f"   (2/5) Sewing (허용치={tol}mm)...")
-                t_sew = time.time()
-                try:
-                    sewing = BRepBuilderAPI_Sewing(tol)
-                    sewing.SetNonManifoldMode(True)
-                    sewing.Add(shape)
-                    sewing.Perform()
-                    sewn = sewing.SewedShape()
-                    elapsed_sew = time.time() - t_sew
-                    self.log_msg(f"      sewing 완료 ({elapsed_sew:.1f}s), null={sewn.IsNull()}")
-                    if not sewn.IsNull():
-                        break
-                except Exception as exc_sew:
-                    self.log_msg(f"      sewing 실패 (tol={tol}): {exc_sew}")
-                    continue
-
-            if sewn is None or sewn.IsNull():
-                self.log_msg("❌ 모든 Sewing 허용치에서 실패")
-                return False
-
-            result = sewn
-            self.log_msg("   (3/5) Shell → Solid 시도...")
-            try:
-                explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
-                if explorer.More():
-                    shell = TopoDS.Shell_s(explorer.Current())
-                    maker = BRepBuilderAPI_MakeSolid(shell)
-                    if maker.IsDone():
-                        result = maker.Solid()
-                        self.log_msg("      Solid 변환 성공")
-                    else:
-                        self.log_msg("      Solid 변환 실패 → Shell로 진행")
-                else:
-                    self.log_msg("      Shell 없음 → sewn shape 그대로 진행")
-            except Exception as exc:
-                self.log_msg(f"      Solid화 생략(셸 유지): {exc}")
-
-            self.log_msg("   (4/5) STEP 파일 쓰기 (AP214)...")
-            t_w = time.time()
-            writer = STEPControl_Writer()
-            Interface_Static.SetCVal_s("write.step.schema", "AP214")
-            tr_status = writer.Transfer(result, STEPControl_AsIs)
-            self.log_msg(f"      Transfer 완료, status={tr_status}")
-            wr_status = writer.Write(step_abs)
-            self.log_msg(f"      Write 완료 ({time.time() - t_w:.1f}s), status={wr_status}")
-
-            if wr_status == 1 and os.path.isfile(step_abs):
-                size_mb = os.path.getsize(step_abs) / 1024 / 1024
-                if size_mb < 0.001:
-                    self.log_msg(f"⚠️ STEP 파일이 비정상적으로 작음 ({size_mb:.4f} MB) — 내용 확인 필요")
-                else:
-                    self.log_msg(f"   (5/5) 검증 — 파일 크기 {size_mb:.1f} MB")
-                self.log_msg(f"✅ STEP 저장: {step_abs} ({size_mb:.1f} MB)")
-                return True
-
-            self.log_msg(f"❌ STEP 저장 실패 (write_status={wr_status})")
-            return False
-        except Exception as exc:
-            self.log_msg(f"❌ STEP 변환 예외: {exc}")
-            import traceback
-
-            self.log_msg(traceback.format_exc())
-            return False
-
-    def do_generate(self) -> None:
-        a = float(self.a_var.get())
-        t = float(self.t_var.get())
-        res = int(self.res_var.get())
-        include_duct = bool(self.duct_var.get())
-        use_z_buffer = bool(self.z_buffer_var.get())
-
-        a = max(3.0, min(8.0, a))
-        t = max(0.05, min(0.5, t))
-        res = max(30, min(120, res))
-
-        self._ui_vars(a, t, res)
-
-        if use_z_buffer:
-            z_min, z_max = Z_BUFFER_MM, TOTAL_Z - Z_BUFFER_MM
-            z_note = f"z∈[{z_min},{z_max}]mm (버퍼 {Z_BUFFER_MM}mm)"
-        else:
-            z_min, z_max = 0.0, TOTAL_Z
-            z_note = f"z∈[0,{TOTAL_Z}]mm (버퍼 없음)"
-
-        self.log_msg(
-            f"✅ 파라미터: a={a} mm, t={t}, res={res}, 외벽={include_duct}, {z_note}"
-        )
-        self.log_msg("🏗️ 형상 생성 시작...")
-        t0 = time.time()
-
-        x_min, x_max = WALL, DUCT_OUTER - WALL
-        nx = max(20, int((x_max - x_min) / a * res))
+    def _build_gyroid(self, a: float, t: float, res: int,
+                      include_duct: bool, z_min: float, z_max: float) -> "trimesh.Trimesh":
+        """주어진 해상도로 자이로이드 메시를 생성하여 반환."""
+        x_min, x_max_coord = WALL, DUCT_OUTER - WALL
+        nx = max(20, int((x_max_coord - x_min) / a * res))
         ny = nx
         nz = max(20, int((z_max - z_min) / a * res))
 
-        x_range = np.linspace(x_min, x_max, nx)
-        y_range = np.linspace(x_min, x_max, ny)
+        x_range = np.linspace(x_min, x_max_coord, nx)
+        y_range = np.linspace(x_min, x_max_coord, ny)
         z_range = np.linspace(z_min, z_max, nz)
         x_grid, y_grid, z_grid = np.meshgrid(x_range, y_range, z_range, indexing="ij")
 
@@ -372,9 +224,9 @@ class GyroidApp:
         )
 
         spacing = (
-            (x_max - x_min) / (nx - 1),
-            (x_max - x_min) / (ny - 1),
-            (z_max - z_min) / (nz - 1),
+            (x_max_coord - x_min) / max(nx - 1, 1),
+            (x_max_coord - x_min) / max(ny - 1, 1),
+            (z_max - z_min) / max(nz - 1, 1),
         )
         verts, faces, _, _ = marching_cubes(phi, level=-t, spacing=spacing)
         verts[:, 0] += x_min
@@ -385,23 +237,113 @@ class GyroidApp:
         combined = gyroid_mesh
 
         if include_duct:
-            self.log_msg("🧱 외벽 결합 중 (Manifold Engine 사용)...")
+            self.log_msg("   외벽 결합 중 (Manifold)...")
             outer_box = trimesh.creation.box(extents=[DUCT_OUTER, DUCT_OUTER, TOTAL_Z])
             outer_box.apply_translation([DUCT_OUTER / 2, DUCT_OUTER / 2, TOTAL_Z / 2])
             inner_box = trimesh.creation.box(extents=[DUCT_INNER, DUCT_INNER, TOTAL_Z + 2])
             inner_box.apply_translation([DUCT_OUTER / 2, DUCT_OUTER / 2, TOTAL_Z / 2])
-            try:
-                duct_wall = outer_box.difference(inner_box, engine="manifold")
-                combined = trimesh.util.concatenate([gyroid_mesh, duct_wall])
-                self.log_msg("✅ 외벽 결합 성공")
-            except Exception as exc:
-                self.log_msg(f"❌ 외벽 결합 실패: {exc}")
-                raise
-        else:
-            self.log_msg("ℹ️ 외벽 미포함 옵션으로 진행")
+            duct_wall = outer_box.difference(inner_box, engine="manifold")
+            combined = trimesh.util.concatenate([gyroid_mesh, duct_wall])
 
-        elapsed = time.time() - t0
-        self.log_msg(f"✨ 형상 생성 완료 (면 수: {len(combined.faces):,}, 소요시간: {elapsed:.1f}초)")
+        return combined
+
+    # ── STEP 변환 ────────────────────────────────────────────────
+
+    def convert_to_step(self, stl_path: str, step_path: str) -> bool:
+        self.log_msg("   STEP 변환 시작 (OCP)...")
+        try:
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+            from OCP.Interface import Interface_Static
+            from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+            from OCP.StlAPI import StlAPI_Reader
+            from OCP.TopAbs import TopAbs_SHELL
+            from OCP.TopoDS import TopoDS, TopoDS_Shape
+            from OCP.TopExp import TopExp_Explorer
+        except ImportError as exc:
+            self.log_msg(f"   OCP(cadquery) 없음 — STEP 생략: {exc}")
+            self.log_msg("   대안: SpaceClaim에서 STL → Convert to Solid → STEP")
+            return False
+
+        stl_abs = str(Path(stl_path).resolve())
+        step_abs = str(Path(step_path).resolve())
+
+        try:
+            self.log_msg("   (1/4) STL 로드...")
+            reader = StlAPI_Reader()
+            shape = TopoDS_Shape()
+            if not reader.Read(shape, stl_abs):
+                self.log_msg(f"   STL 읽기 실패: {stl_abs}")
+                return False
+
+            self.log_msg("   (2/4) Sewing...")
+            t_sew = time.time()
+            sewing = BRepBuilderAPI_Sewing(0.1)
+            sewing.SetNonManifoldMode(True)
+            sewing.Add(shape)
+            sewing.Perform()
+            sewn = sewing.SewedShape()
+            self.log_msg(f"   Sewing 완료 ({time.time() - t_sew:.1f}s)")
+
+            if sewn.IsNull():
+                self.log_msg("   Sewing 결과 null — STEP 생략")
+                return False
+
+            result = sewn
+            self.log_msg("   (3/4) Shell → Solid...")
+            try:
+                explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+                if explorer.More():
+                    shell = TopoDS.Shell_s(explorer.Current())
+                    maker = BRepBuilderAPI_MakeSolid(shell)
+                    if maker.IsDone():
+                        result = maker.Solid()
+                        self.log_msg("   Solid 변환 성공")
+                    else:
+                        self.log_msg("   Solid 변환 실패 → Shell로 진행")
+            except Exception as exc:
+                self.log_msg(f"   Solid화 생략: {exc}")
+
+            self.log_msg("   (4/4) STEP 쓰기 (AP214)...")
+            t_w = time.time()
+            writer = STEPControl_Writer()
+            Interface_Static.SetCVal_s("write.step.schema", "AP214")
+            writer.Transfer(result, STEPControl_AsIs)
+            wr_status = writer.Write(step_abs)
+            self.log_msg(f"   Write 완료 ({time.time() - t_w:.1f}s), status={wr_status}")
+
+            if wr_status == 1 and os.path.isfile(step_abs):
+                size_mb = os.path.getsize(step_abs) / 1024 / 1024
+                self.log_msg(f"   STEP 저장 완료: {step_abs} ({size_mb:.1f} MB)")
+                return True
+
+            self.log_msg(f"   STEP 저장 실패 (status={wr_status})")
+            return False
+        except Exception as exc:
+            self.log_msg(f"   STEP 변환 예외: {exc}")
+            import traceback
+
+            self.log_msg(traceback.format_exc())
+            return False
+
+    # ── 메인 생성 흐름 ──────────────────────────────────────────
+
+    def do_generate(self) -> None:
+        a = max(3.0, min(8.0, float(self.a_var.get())))
+        t = max(0.05, min(0.5, float(self.t_var.get())))
+        res = max(30, min(120, int(self.res_var.get())))
+        step_res = max(3, min(15, int(self.step_res_var.get())))
+        include_duct = bool(self.duct_var.get())
+        use_z_buffer = bool(self.z_buffer_var.get())
+
+        if use_z_buffer:
+            z_min, z_max = Z_BUFFER_MM, TOTAL_Z - Z_BUFFER_MM
+            z_note = f"z=[{z_min},{z_max}]mm (버퍼 {Z_BUFFER_MM}mm)"
+        else:
+            z_min, z_max = 0.0, TOTAL_Z
+            z_note = f"z=[0,{TOTAL_Z}]mm (버퍼 없음)"
+
+        self.log_msg(f"파라미터: a={a}mm, t={t}, 외벽={include_duct}, {z_note}")
+        self.log_msg(f"해상도: STL={res}, STEP={step_res}")
 
         a_str = f"{a:.1f}".replace(".", "")
         t_str = f"{t:.2f}"[2:]
@@ -411,37 +353,50 @@ class GyroidApp:
         stl_path = os.path.join(self.output_dir, f"{base_name}.stl")
         step_path = os.path.join(self.output_dir, f"{base_name}.step")
 
+        # ── STL 생성 (고해상도) ──
         if self.stl_var.get():
-            combined.export(stl_path, file_type="stl")
+            self.log_msg(f"[STL] 해상도 {res}로 형상 생성 중...")
+            t0 = time.time()
+            stl_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
+            elapsed = time.time() - t0
+            self.log_msg(f"[STL] 형상 완료 (면 수: {len(stl_mesh.faces):,}, {elapsed:.1f}초)")
+
+            stl_mesh.export(stl_path, file_type="stl")
             stl_size = os.path.getsize(stl_path) / 1024 / 1024
-            self.log_msg(f"✅ STL 저장: {stl_path} ({stl_size:.1f} MB)")
-
-        if self.step_var.get():
-            # STEP용 메시 전처리 (decimation 포함) — STL은 원본 해상도 유지
-            self.log_msg("🔧 STEP 변환을 위한 메시 전처리 중...")
-            step_mesh = self._clean_mesh(combined.copy(), log_fn=self.log_msg)
-            self.log_msg(f"   전처리 후 면 수: {len(step_mesh.faces):,}")
-            # decimation된 메시로 임시 STL 생성 (STEP 변환용)
-            step_stl_path = stl_path if not self.stl_var.get() else stl_path + ".step_tmp.stl"
-            step_mesh.export(step_stl_path, file_type="stl")
-            if self.stl_var.get():
-                self.log_msg("ℹ️ STEP 변환용 임시 STL 생성 (decimated)")
-            del step_mesh
-            # OCP가 STL을 다시 읽으므로 Python 쪽 대용량 메쉬 해제
-            try:
-                del combined
-                del gyroid_mesh
-                del verts, faces, phi, x_grid, y_grid, z_grid
-            except Exception:
-                pass
+            self.log_msg(f"[STL] 저장 완료: {stl_path} ({stl_size:.1f} MB)")
+            del stl_mesh
             gc.collect()
-            self.log_msg("⏳ 메모리 정리 후 STEP 변환 진행...")
-            self.convert_to_step(step_stl_path, step_path)
-            # 임시 STL 정리
-            if step_stl_path != stl_path and os.path.isfile(step_stl_path):
-                os.remove(step_stl_path)
 
-        self.log_msg("🎉 완료!")
+        # ── STEP 생성 (저해상도로 별도 생성) ──
+        if self.step_var.get():
+            self.log_msg(f"[STEP] 해상도 {step_res}로 형상 생성 중 (STL과 별도)...")
+            t0 = time.time()
+            step_mesh = self._build_gyroid(a, t, step_res, include_duct, z_min, z_max)
+            elapsed = time.time() - t0
+            n_faces = len(step_mesh.faces)
+            self.log_msg(f"[STEP] 형상 완료 (면 수: {n_faces:,}, {elapsed:.1f}초)")
+
+            # 메시 정리
+            trimesh.repair.fix_normals(step_mesh)
+            trimesh.repair.fix_winding(step_mesh)
+            step_mesh.merge_vertices()
+            step_mesh.process(validate=True)
+
+            # 임시 STL 생성 → OCP로 STEP 변환
+            tmp_stl = stl_path + ".step_tmp.stl"
+            step_mesh.export(tmp_stl, file_type="stl")
+            tmp_stl_size = os.path.getsize(tmp_stl) / 1024 / 1024
+            self.log_msg(f"[STEP] 임시 STL: {n_faces:,} 면, {tmp_stl_size:.1f} MB")
+            del step_mesh
+            gc.collect()
+
+            self.convert_to_step(tmp_stl, step_path)
+
+            # 임시 파일 정리
+            if os.path.isfile(tmp_stl):
+                os.remove(tmp_stl)
+
+        self.log_msg("완료!")
 
 
 if __name__ == "__main__":
