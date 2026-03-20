@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# STEP: 빌드 환경에 cadquery(→OCP) 설치 후 PyInstaller 실행 (CI / build_windows.bat)
+# onedir 모드: DLL을 폴더에 직접 배치하여 OCCT DLL 로딩 안정화
 
 import os
 
@@ -29,7 +29,8 @@ hiddenimports = [
     "scipy.ndimage",
 ] + ocp_hiddenimports
 
-runtime_hooks = [os.path.join(_spec_dir, "pyi_rth_gyroid_ocp.py")]
+# onedir에서는 DLL이 같은 폴더에 있으므로 runtime hook 불필요
+runtime_hooks = []
 
 a = Analysis(
     ["gyroid_gui.py"],
@@ -49,20 +50,27 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="GyroidGenerator",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="GyroidGenerator",
 )
