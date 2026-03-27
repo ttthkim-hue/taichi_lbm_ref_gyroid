@@ -27,8 +27,6 @@ gui_hiddenimports = [
     "trimesh.intersections",
     "trimesh.path",
     "trimesh.path.polygons",
-    "trimesh.voxel",
-    "trimesh.voxel.encoding",
     "manifold3d",
     "shapely",
     "shapely.ops",
