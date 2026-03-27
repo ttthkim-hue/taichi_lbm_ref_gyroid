@@ -46,6 +46,7 @@ class GyroidApp:
         self.stl_var = tk.BooleanVar(value=True)
         self.step_var = tk.BooleanVar(value=True)
         self.unit_cell_var = tk.BooleanVar(value=False)
+        self.cross_section_var = tk.BooleanVar(value=False)
         self.z_buffer_var = tk.BooleanVar(value=True)
 
         self._build_ui()
@@ -118,6 +119,7 @@ class GyroidApp:
         ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="단위셀 STL (1 unit cell, 외벽 없음)", variable=self.unit_cell_var).pack(anchor="w")
+        ttk.Checkbutton(out_frame, text="십자 단면 STL (내부 구조 확인용)", variable=self.cross_section_var).pack(anchor="w")
         ttk.Label(
             out_frame,
             text="※ STEP은 낮은 해상도로 별도 생성됩니다 (형상 동일, Sewing 속도 확보)",
@@ -322,6 +324,37 @@ class GyroidApp:
         verts, faces, _, _ = marching_cubes(phi, level=-t, spacing=spacing)
         return trimesh.Trimesh(vertices=verts, faces=faces)
 
+    def _build_cross_section(self, mesh: "trimesh.Trimesh", gap_mm: float = 5.0) -> "trimesh.Trimesh":
+        """메시를 XY 중심으로 십자 분할 후 gap만큼 벌려서 내부가 보이게 한다."""
+        bounds = mesh.bounds  # [[xmin,ymin,zmin],[xmax,ymax,zmax]]
+        cx = (bounds[0][0] + bounds[1][0]) / 2
+        cy = (bounds[0][1] + bounds[1][1]) / 2
+
+        # 4분할: slice_mesh_plane(plane_origin, plane_normal) → normal 방향 쪽 유지
+        try:
+            xp = mesh.slice_plane([cx, 0, 0], [1, 0, 0], cap=True)  # x > cx
+            xn = mesh.slice_plane([cx, 0, 0], [-1, 0, 0], cap=True)  # x < cx
+            q1 = xp.slice_plane([0, cy, 0], [0, 1, 0], cap=True)  # x>cx, y>cy
+            q2 = xn.slice_plane([0, cy, 0], [0, 1, 0], cap=True)  # x<cx, y>cy
+            q3 = xn.slice_plane([0, cy, 0], [0, -1, 0], cap=True)  # x<cx, y<cy
+            q4 = xp.slice_plane([0, cy, 0], [0, -1, 0], cap=True)  # x>cx, y<cy
+        except Exception as e:
+            self.log_msg(f"   단면 분할 실패: {e}")
+            return mesh
+
+        # 각 사분면을 gap만큼 바깥으로 이동
+        dx, dy = gap_mm / 2, gap_mm / 2
+        q1.apply_translation([+dx, +dy, 0])
+        q2.apply_translation([-dx, +dy, 0])
+        q3.apply_translation([-dx, -dy, 0])
+        q4.apply_translation([+dx, -dy, 0])
+
+        parts = [q for q in [q1, q2, q3, q4] if len(q.faces) > 0]
+        if not parts:
+            self.log_msg("   단면 분할 결과 빈 메시")
+            return mesh
+        return trimesh.util.concatenate(parts)
+
     # ── STEP 변환 (별도 프로세스) ──────────────────────────────────
 
     @staticmethod
@@ -484,6 +517,23 @@ class GyroidApp:
             )
             self.log_msg(f"[단위셀] 저장: {uc_path}")
             del uc_mesh
+            gc.collect()
+
+        # ── 십자 단면 STL (내부 확인용) ──
+        if self.cross_section_var.get():
+            self.log_msg(f"[단면] 십자 단면 STL 생성 중 (해상도 {res})...")
+            t0 = time.time()
+            cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
+            cs_mesh = self._build_cross_section(cs_mesh, gap_mm=5.0)
+            elapsed = time.time() - t0
+            cs_path = os.path.join(self.output_dir, f"{base_name}_cross_section.stl")
+            cs_mesh.export(cs_path, file_type="stl")
+            cs_size = os.path.getsize(cs_path) / 1024 / 1024
+            self.log_msg(
+                f"[단면] 완료 (면 수: {len(cs_mesh.faces):,}, {elapsed:.1f}초, {cs_size:.1f} MB)"
+            )
+            self.log_msg(f"[단면] 저장: {cs_path}")
+            del cs_mesh
             gc.collect()
 
         self.log_msg("완료!")

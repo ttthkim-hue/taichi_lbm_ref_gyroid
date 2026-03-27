@@ -3,5 +3,7 @@ scipy
 scikit-image
 trimesh
 manifold3d
+shapely
+rtree
 cadquery
 pyinstaller

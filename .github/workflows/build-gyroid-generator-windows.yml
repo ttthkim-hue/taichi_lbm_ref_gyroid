@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies (incl. cadquery for STEP/OCP)
         run: |
           python -m pip install --upgrade pip wheel setuptools
-          pip install numpy scipy scikit-image trimesh manifold3d pyinstaller cadquery
+          pip install numpy scipy scikit-image trimesh manifold3d shapely rtree pyinstaller cadquery
 
       - name: Validate STEP generation (OCP pipeline test)
         run: |
