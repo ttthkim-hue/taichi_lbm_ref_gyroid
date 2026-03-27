@@ -39,7 +39,7 @@ class GyroidApp:
         self.output_dir = os.getcwd()
 
         self.a_var = tk.DoubleVar(value=5.0)
-        self.t_var = tk.DoubleVar(value=0.3)
+        self.t_var = tk.DoubleVar(value=0.10)
         self.res_var = tk.IntVar(value=60)
         self.step_res_var = tk.IntVar(value=8)
         self.duct_var = tk.BooleanVar(value=True)
@@ -68,7 +68,7 @@ class GyroidApp:
 
         ttk.Label(param_frame, text="두께 파라미터 t:").grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(param_frame, textvariable=self.t_var, width=12).grid(row=2, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(param_frame, text="권장 범위: 0.05 ~ 0.50 (벽두께 ≈ a×0.45 ~ a×0.55)", foreground="gray").grid(
+        ttk.Label(param_frame, text="권장: 0.02~0.10 (0.10 초과 시 얇은 막 생성, 프린팅 불가)", foreground="gray").grid(
             row=3, column=0, columnspan=2, sticky="w"
         )
 
@@ -159,7 +159,7 @@ class GyroidApp:
         ).pack(anchor="w")
         ttk.Label(
             info_frame,
-            text="a: 3~8mm | t: 0.05~0.5 | 벽두께 ≈ a×0.45mm (a=3: 1.4mm, a=5: 2.3mm)",
+            text="a: 4~8mm | t: 0.02~0.10 | t>0.10: 위상전이로 얇은 막 생성 (프린팅 불가)",
             font=("Consolas", 8),
             foreground="gray",
         ).pack(anchor="w")
@@ -205,9 +205,9 @@ class GyroidApp:
     # ── 벽두께 계산 ──────────────────────────────────────────────
 
     @staticmethod
-    def _calc_min_wall(a: float, t: float, grid_n: int = 80) -> float:
-        """Erosion 방식으로 최소 벽두께 측정 (mm). 2x2x2 타일링으로 주기 경계 처리."""
-        from scipy.ndimage import distance_transform_edt
+    def _calc_min_wall(a: float, t: float, grid_n: int = 100) -> float:
+        """Local max 방식으로 최소 벽두께 측정 (mm). 2x2x2 타일링으로 주기 경계 처리."""
+        from scipy.ndimage import distance_transform_edt, maximum_filter
 
         voxel = a / grid_n
         n2 = grid_n * 2
@@ -222,20 +222,19 @@ class GyroidApp:
         solid = phi > -t
         if not solid.any() or solid.all():
             return 0.0
-        dt = distance_transform_edt(solid)  # voxel 단위
+        dt = distance_transform_edt(solid) * voxel
         # 경계 제거: 중앙 영역만
         m = grid_n // 4
         dt_c = dt[m:-m, m:-m, m:-m]
         solid_c = solid[m:-m, m:-m, m:-m]
         if not solid_c.any():
             return 0.0
-        max_r = float(dt_c[solid_c].max())
-        min_r = max_r
-        for r in range(1, int(max_r) + 1):
-            if not (dt_c > r).any():
-                min_r = r
-                break
-        return 2.0 * min_r * voxel
+        # 골격(medial axis) = distance field의 local maxima
+        lm = maximum_filter(dt_c, size=3)
+        ridge = (dt_c == lm) & solid_c & (dt_c > voxel * 1.5)
+        if not ridge.any():
+            return float(dt_c[solid_c].max()) * 2
+        return float(dt_c[ridge].min()) * 2
 
     def _update_wall_thickness(self) -> None:
         """GUI 버튼 클릭 시 벽두께 계산 및 표시."""
