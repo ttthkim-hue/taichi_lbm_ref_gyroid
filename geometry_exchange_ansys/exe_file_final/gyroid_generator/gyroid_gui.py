@@ -39,7 +39,7 @@ class GyroidApp:
         self.output_dir = os.getcwd()
 
         self.a_var = tk.DoubleVar(value=5.0)
-        self.t_var = tk.DoubleVar(value=0.06)
+        self.t_var = tk.DoubleVar(value=0.3)
         self.res_var = tk.IntVar(value=60)
         self.step_res_var = tk.IntVar(value=8)
         self.duct_var = tk.BooleanVar(value=True)
@@ -62,13 +62,13 @@ class GyroidApp:
 
         ttk.Label(param_frame, text="단위셀 크기 a [mm]:").grid(row=0, column=0, sticky="w")
         ttk.Entry(param_frame, textvariable=self.a_var, width=12).grid(row=0, column=1, sticky="w")
-        ttk.Label(param_frame, text="권장 범위: 4.0 ~ 8.0 mm (벽두께 1mm 이상 확보)", foreground="gray").grid(
+        ttk.Label(param_frame, text="권장 범위: 3.0 ~ 8.0 mm", foreground="gray").grid(
             row=1, column=0, columnspan=2, sticky="w"
         )
 
         ttk.Label(param_frame, text="두께 파라미터 t:").grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(param_frame, textvariable=self.t_var, width=12).grid(row=2, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(param_frame, text="권장 범위: 0.02 ~ 0.10 (0.11 이상은 위상전이로 벽 소멸)", foreground="gray").grid(
+        ttk.Label(param_frame, text="권장 범위: 0.05 ~ 0.50 (벽두께 ≈ a×0.45 ~ a×0.55)", foreground="gray").grid(
             row=3, column=0, columnspan=2, sticky="w"
         )
 
@@ -159,7 +159,7 @@ class GyroidApp:
         ).pack(anchor="w")
         ttk.Label(
             info_frame,
-            text="a: 4~8mm | t: 0.02~0.10 (>0.10 위상전이) | 최소벽두께 >= 1mm 권장",
+            text="a: 3~8mm | t: 0.05~0.5 | 벽두께 ≈ a×0.45mm (a=3: 1.4mm, a=5: 2.3mm)",
             font=("Consolas", 8),
             foreground="gray",
         ).pack(anchor="w")
@@ -205,12 +205,13 @@ class GyroidApp:
     # ── 벽두께 계산 ──────────────────────────────────────────────
 
     @staticmethod
-    def _calc_min_wall(a: float, t: float, grid_n: int = 150) -> float:
-        """단위셀 distance transform으로 최소 벽두께 추정 (mm)."""
+    def _calc_min_wall(a: float, t: float, grid_n: int = 80) -> float:
+        """Erosion 방식으로 최소 벽두께 측정 (mm). 2x2x2 타일링으로 주기 경계 처리."""
         from scipy.ndimage import distance_transform_edt
 
         voxel = a / grid_n
-        lin = np.linspace(0, a, grid_n, endpoint=False) + voxel / 2
+        n2 = grid_n * 2
+        lin = np.linspace(0, 2 * a, n2, endpoint=False) + voxel / 2
         x, y, z = np.meshgrid(lin, lin, lin, indexing="ij")
         k = 2.0 * np.pi / a
         phi = (
@@ -221,14 +222,20 @@ class GyroidApp:
         solid = phi > -t
         if not solid.any() or solid.all():
             return 0.0
-        dt = distance_transform_edt(solid) * voxel
-        # 골격(medial axis) 근사: local maxima of distance field
-        from scipy.ndimage import maximum_filter
-        local_max = maximum_filter(dt, size=3)
-        is_skeleton = (dt == local_max) & solid & (dt > voxel)
-        if not is_skeleton.any():
-            return float(dt.max()) * 2
-        return float(dt[is_skeleton].min()) * 2
+        dt = distance_transform_edt(solid)  # voxel 단위
+        # 경계 제거: 중앙 영역만
+        m = grid_n // 4
+        dt_c = dt[m:-m, m:-m, m:-m]
+        solid_c = solid[m:-m, m:-m, m:-m]
+        if not solid_c.any():
+            return 0.0
+        max_r = float(dt_c[solid_c].max())
+        min_r = max_r
+        for r in range(1, int(max_r) + 1):
+            if not (dt_c > r).any():
+                min_r = r
+                break
+        return 2.0 * min_r * voxel
 
     def _update_wall_thickness(self) -> None:
         """GUI 버튼 클릭 시 벽두께 계산 및 표시."""
