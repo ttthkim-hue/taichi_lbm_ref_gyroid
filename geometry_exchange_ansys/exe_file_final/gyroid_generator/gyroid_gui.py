@@ -39,7 +39,7 @@ class GyroidApp:
         self.output_dir = os.getcwd()
 
         self.a_var = tk.DoubleVar(value=5.0)
-        self.t_var = tk.DoubleVar(value=0.3)
+        self.t_var = tk.DoubleVar(value=0.06)
         self.res_var = tk.IntVar(value=60)
         self.step_res_var = tk.IntVar(value=8)
         self.duct_var = tk.BooleanVar(value=True)
@@ -61,13 +61,13 @@ class GyroidApp:
 
         ttk.Label(param_frame, text="단위셀 크기 a [mm]:").grid(row=0, column=0, sticky="w")
         ttk.Entry(param_frame, textvariable=self.a_var, width=12).grid(row=0, column=1, sticky="w")
-        ttk.Label(param_frame, text="권장 범위: 3.0 ~ 8.0 mm", foreground="gray").grid(
+        ttk.Label(param_frame, text="권장 범위: 4.0 ~ 8.0 mm (벽두께 1mm 이상 확보)", foreground="gray").grid(
             row=1, column=0, columnspan=2, sticky="w"
         )
 
         ttk.Label(param_frame, text="두께 파라미터 t:").grid(row=2, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(param_frame, textvariable=self.t_var, width=12).grid(row=2, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(param_frame, text="권장 범위: 0.05 ~ 0.50", foreground="gray").grid(
+        ttk.Label(param_frame, text="권장 범위: 0.02 ~ 0.10 (0.11 이상은 위상전이로 벽 소멸)", foreground="gray").grid(
             row=3, column=0, columnspan=2, sticky="w"
         )
 
@@ -157,7 +157,7 @@ class GyroidApp:
         ).pack(anchor="w")
         ttk.Label(
             info_frame,
-            text="a: 3~8 mm | t: 0.05~0.5 | 버퍼 ON 시 Gyroid z 구간만 5~105mm",
+            text="a: 4~8mm | t: 0.02~0.10 (>0.10 위상전이) | 최소벽두께 >= 1mm 권장",
             font=("Consolas", 8),
             foreground="gray",
         ).pack(anchor="w")
@@ -203,7 +203,7 @@ class GyroidApp:
     # ── 벽두께 계산 ──────────────────────────────────────────────
 
     @staticmethod
-    def _calc_min_wall(a: float, t: float, grid_n: int = 80) -> float:
+    def _calc_min_wall(a: float, t: float, grid_n: int = 150) -> float:
         """단위셀 distance transform으로 최소 벽두께 추정 (mm)."""
         from scipy.ndimage import distance_transform_edt
 
@@ -230,8 +230,8 @@ class GyroidApp:
 
     def _update_wall_thickness(self) -> None:
         """GUI 버튼 클릭 시 벽두께 계산 및 표시."""
-        a = max(3.0, min(8.0, float(self.a_var.get())))
-        t = max(0.05, min(0.5, float(self.t_var.get())))
+        a = max(3.0, min(10.0, float(self.a_var.get())))
+        t = max(0.01, min(0.50, float(self.t_var.get())))
         wt = self._calc_min_wall(a, t)
         self.wall_label.config(text=f"{wt:.2f} mm")
         if wt < MIN_PRINT_WALL:
@@ -394,8 +394,8 @@ class GyroidApp:
     # ── 메인 생성 흐름 ──────────────────────────────────────────
 
     def do_generate(self) -> None:
-        a = max(3.0, min(8.0, float(self.a_var.get())))
-        t = max(0.05, min(0.5, float(self.t_var.get())))
+        a = max(3.0, min(10.0, float(self.a_var.get())))
+        t = max(0.01, min(0.50, float(self.t_var.get())))
         res = max(30, min(120, int(self.res_var.get())))
         step_res = max(3, min(15, int(self.step_res_var.get())))
         include_duct = bool(self.duct_var.get())
