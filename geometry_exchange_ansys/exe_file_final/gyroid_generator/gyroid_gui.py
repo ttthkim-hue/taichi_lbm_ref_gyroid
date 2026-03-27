@@ -22,6 +22,7 @@ WALL = 1.0
 DUCT_INNER = DUCT_OUTER - 2 * WALL
 TOTAL_Z = 110.0
 Z_BUFFER_MM = 5.0
+MIN_PRINT_WALL = 1.0  # mm — 3D 프린팅 최소 벽두께
 
 
 class GyroidApp:
@@ -44,6 +45,7 @@ class GyroidApp:
         self.duct_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
         self.step_var = tk.BooleanVar(value=True)
+        self.unit_cell_var = tk.BooleanVar(value=False)
         self.z_buffer_var = tk.BooleanVar(value=True)
 
         self._build_ui()
@@ -99,10 +101,23 @@ class GyroidApp:
             font=("TkDefaultFont", 8),
         ).grid(row=10, column=0, columnspan=2, sticky="w")
 
+        # 벽두께 표시
+        wall_frame = ttk.Frame(param_frame)
+        wall_frame.grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(wall_frame, text="예상 최소 벽두께:").pack(side="left")
+        self.wall_label = ttk.Label(wall_frame, text="- mm", font=("Consolas", 9, "bold"))
+        self.wall_label.pack(side="left", padx=(6, 0))
+        ttk.Button(wall_frame, text="계산", command=self._update_wall_thickness, width=6).pack(side="left", padx=(8, 0))
+        self.wall_warn_label = ttk.Label(
+            param_frame, text="", foreground="red", font=("TkDefaultFont", 8)
+        )
+        self.wall_warn_label.grid(row=12, column=0, columnspan=2, sticky="w")
+
         out_frame = ttk.LabelFrame(main, text="출력 설정", padding=10)
         out_frame.pack(fill="x", padx=4, pady=4)
         ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
+        ttk.Checkbutton(out_frame, text="단위셀 STL (1 unit cell, 외벽 없음)", variable=self.unit_cell_var).pack(anchor="w")
         ttk.Label(
             out_frame,
             text="※ STEP은 낮은 해상도로 별도 생성됩니다 (형상 동일, Sewing 속도 확보)",
@@ -185,9 +200,52 @@ class GyroidApp:
     def _set_button_state(self, enabled: bool) -> None:
         self.btn.config(state=("normal" if enabled else "disabled"))
 
+    # ── 벽두께 계산 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _calc_min_wall(a: float, t: float, grid_n: int = 80) -> float:
+        """단위셀 distance transform으로 최소 벽두께 추정 (mm)."""
+        from scipy.ndimage import distance_transform_edt
+
+        voxel = a / grid_n
+        lin = np.linspace(0, a, grid_n, endpoint=False) + voxel / 2
+        x, y, z = np.meshgrid(lin, lin, lin, indexing="ij")
+        k = 2.0 * np.pi / a
+        phi = (
+            np.sin(k * x) * np.cos(k * y)
+            + np.sin(k * y) * np.cos(k * z)
+            + np.sin(k * z) * np.cos(k * x)
+        )
+        solid = phi > -t
+        if not solid.any() or solid.all():
+            return 0.0
+        dt = distance_transform_edt(solid) * voxel
+        # 골격(medial axis) 근사: local maxima of distance field
+        from scipy.ndimage import maximum_filter
+        local_max = maximum_filter(dt, size=3)
+        is_skeleton = (dt == local_max) & solid & (dt > voxel)
+        if not is_skeleton.any():
+            return float(dt.max()) * 2
+        return float(dt[is_skeleton].min()) * 2
+
+    def _update_wall_thickness(self) -> None:
+        """GUI 버튼 클릭 시 벽두께 계산 및 표시."""
+        a = max(3.0, min(8.0, float(self.a_var.get())))
+        t = max(0.05, min(0.5, float(self.t_var.get())))
+        wt = self._calc_min_wall(a, t)
+        self.wall_label.config(text=f"{wt:.2f} mm")
+        if wt < MIN_PRINT_WALL:
+            self.wall_label.config(foreground="red")
+            self.wall_warn_label.config(
+                text=f"⚠ 최소 벽두께 {wt:.2f}mm < {MIN_PRINT_WALL}mm — 3D 프린팅 불가! a를 키우거나 t를 높이세요"
+            )
+        else:
+            self.wall_label.config(foreground="green")
+            self.wall_warn_label.config(text=f"✓ 프린팅 가능 (>= {MIN_PRINT_WALL}mm)")
+
     def on_generate(self) -> None:
-        if not self.stl_var.get() and not self.step_var.get():
-            messagebox.showwarning("출력 설정 필요", "STL 또는 STEP 중 최소 1개를 선택하세요.")
+        if not self.stl_var.get() and not self.step_var.get() and not self.unit_cell_var.get():
+            messagebox.showwarning("출력 설정 필요", "STL, STEP, 단위셀 중 최소 1개를 선택하세요.")
             return
         self._set_button_state(False)
         threading.Thread(target=self.run_generation, daemon=True).start()
@@ -248,6 +306,21 @@ class GyroidApp:
             combined = trimesh.util.concatenate([gyroid_mesh, duct_wall])
 
         return combined
+
+    def _build_unit_cell(self, a: float, t: float, res: int) -> "trimesh.Trimesh":
+        """단위셀 1개 (a×a×a mm 정육면체) 자이로이드 메시 생성. 외벽 없음."""
+        n = max(20, int(res))
+        lin = np.linspace(0, a, n)
+        x, y, z = np.meshgrid(lin, lin, lin, indexing="ij")
+        k = 2.0 * np.pi / a
+        phi = (
+            np.sin(k * x) * np.cos(k * y)
+            + np.sin(k * y) * np.cos(k * z)
+            + np.sin(k * z) * np.cos(k * x)
+        )
+        spacing = (a / max(n - 1, 1),) * 3
+        verts, faces, _, _ = marching_cubes(phi, level=-t, spacing=spacing)
+        return trimesh.Trimesh(vertices=verts, faces=faces)
 
     # ── STEP 변환 (별도 프로세스) ──────────────────────────────────
 
@@ -335,8 +408,16 @@ class GyroidApp:
             z_min, z_max = 0.0, TOTAL_Z
             z_note = f"z=[0,{TOTAL_Z}]mm (버퍼 없음)"
 
+        # 벽두께 검증
+        wall_t = self._calc_min_wall(a, t)
         self.log_msg(f"파라미터: a={a}mm, t={t}, 외벽={include_duct}, {z_note}")
         self.log_msg(f"해상도: STL={res}, STEP={step_res}")
+        self.log_msg(f"예상 최소 벽두께: {wall_t:.2f} mm")
+        if wall_t < MIN_PRINT_WALL:
+            self.log_msg(
+                f"⚠ 벽두께 {wall_t:.2f}mm < {MIN_PRINT_WALL}mm — 3D 프린팅 최소 조건 미달!"
+            )
+            self.log_msg("  → a를 키우거나 t를 높여 벽두께를 확보하세요. 생성은 계속 진행합니다.")
 
         a_str = f"{a:.1f}".replace(".", "")
         t_str = f"{t:.2f}"[2:]
@@ -388,6 +469,22 @@ class GyroidApp:
             # 임시 파일 정리
             if os.path.isfile(tmp_stl):
                 os.remove(tmp_stl)
+
+        # ── 단위셀 STL (1 unit cell, 외벽 없음) ──
+        if self.unit_cell_var.get():
+            self.log_msg(f"[단위셀] 해상도 {res}로 단위셀 생성 중 (a={a}mm 정육면체)...")
+            t0 = time.time()
+            uc_mesh = self._build_unit_cell(a, t, res)
+            elapsed = time.time() - t0
+            uc_path = os.path.join(self.output_dir, f"{base_name}_unitcell.stl")
+            uc_mesh.export(uc_path, file_type="stl")
+            uc_size = os.path.getsize(uc_path) / 1024 / 1024
+            self.log_msg(
+                f"[단위셀] 완료 (면 수: {len(uc_mesh.faces):,}, {elapsed:.1f}초, {uc_size:.1f} MB)"
+            )
+            self.log_msg(f"[단위셀] 저장: {uc_path}")
+            del uc_mesh
+            gc.collect()
 
         self.log_msg("완료!")
 
