@@ -305,13 +305,18 @@ class GyroidApp:
         combined = gyroid_mesh
 
         if include_duct:
-            self.log_msg("   외벽 결합 중 (Manifold)...")
+            self.log_msg("   외벽 결합 중 (Boolean Union)...")
             outer_box = trimesh.creation.box(extents=[DUCT_OUTER, DUCT_OUTER, TOTAL_Z])
             outer_box.apply_translation([DUCT_OUTER / 2, DUCT_OUTER / 2, TOTAL_Z / 2])
             inner_box = trimesh.creation.box(extents=[DUCT_INNER, DUCT_INNER, TOTAL_Z + 2])
             inner_box.apply_translation([DUCT_OUTER / 2, DUCT_OUTER / 2, TOTAL_Z / 2])
             duct_wall = outer_box.difference(inner_box, engine="manifold")
-            combined = trimesh.util.concatenate([gyroid_mesh, duct_wall])
+            try:
+                combined = duct_wall.union(gyroid_mesh, engine="manifold")
+                self.log_msg("   Boolean union 성공")
+            except Exception:
+                self.log_msg("   Boolean union 실패 → concatenate fallback")
+                combined = trimesh.util.concatenate([gyroid_mesh, duct_wall])
 
         return combined
 
@@ -530,7 +535,7 @@ class GyroidApp:
             self.log_msg(f"[단면] 십자 단면 STL 생성 중 (해상도 {res})...")
             t0 = time.time()
             cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
-            cs_mesh = self._build_cross_section(cs_mesh, gap_mm=5.0)
+            cs_mesh = self._build_cross_section(cs_mesh, gap_mm=25.0)
             elapsed = time.time() - t0
             cs_path = os.path.join(self.output_dir, f"{base_name}_cross_section.stl")
             cs_mesh.export(cs_path, file_type="stl")
