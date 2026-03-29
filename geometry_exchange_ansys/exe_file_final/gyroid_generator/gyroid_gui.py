@@ -4,7 +4,7 @@
 Gyroid Catalyst Support Generator v2
 - 복셀 필드 합성 방식: 덕트벽 + 자이로이드를 phi 필드에서 직접 합성
   → mesh boolean 불필요, 단일 marching_cubes로 watertight mesh 생성
-- 적응형 Z/XY 레이아웃, 미러플립 단면, dual isosurface 벽두께 시각화
+- 적응형 Z/XY 레이아웃, 1열 단면 (정면에서 내부 직접 확인)
 """
 
 import gc
@@ -134,7 +134,6 @@ class GyroidApp:
         self.step_var = tk.BooleanVar(value=True)
         self.unit_cell_var = tk.BooleanVar(value=False)
         self.cross_section_var = tk.BooleanVar(value=False)
-        self.thickness_vis_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._update_info_panel()
@@ -202,10 +201,8 @@ class GyroidApp:
         ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="단위셀 STL (1 cell, 외벽 없음)", variable=self.unit_cell_var).pack(anchor="w")
-        ttk.Checkbutton(out_frame, text="십자 단면 STL (미러플립, 내부 확인용)",
+        ttk.Checkbutton(out_frame, text="단면 STL (2분할, 정면에서 내부 확인용)",
                          variable=self.cross_section_var).pack(anchor="w")
-        ttk.Checkbutton(out_frame, text="벽두께 시각화 STL (dual isosurface, 미리보기 전용)",
-                         variable=self.thickness_vis_var).pack(anchor="w")
         ttk.Label(
             out_frame,
             text="* STEP는 별도 저해상도 mesh로 생성 (형상 동일, Sewing 속도 확보)",
@@ -381,7 +378,7 @@ class GyroidApp:
 
     def on_generate(self) -> None:
         any_output = (self.stl_var.get() or self.step_var.get() or self.unit_cell_var.get()
-                      or self.cross_section_var.get() or self.thickness_vis_var.get())
+                      or self.cross_section_var.get())
         if not any_output:
             messagebox.showwarning("출력 선택 필요", "최소 1개 출력 옵션을 선택하세요.")
             return
@@ -415,8 +412,7 @@ class GyroidApp:
     # ── 자이로이드 메시 생성 (복셀 필드 합성) ──
 
     def _build_gyroid(self, a: float, t: float, res: int,
-                      include_duct: bool, z_min: float, z_max: float,
-                      dual_isosurface: bool = False) -> "trimesh.Trimesh":
+                      include_duct: bool, z_min: float, z_max: float) -> "trimesh.Trimesh":
         """
         복셀 필드 합성 방식으로 자이로이드(+덕트벽) mesh 생성.
         include_duct=True 시 phi 필드에 덕트벽을 직접 합성 → mesh boolean 불필요.
@@ -529,20 +525,6 @@ class GyroidApp:
         mesh.merge_vertices()
         trimesh.repair.fix_normals(mesh)
 
-        # Dual isosurface (벽두께 시각화)
-        if dual_isosurface:
-            try:
-                vi, fi, _, _ = marching_cubes(phi, level=+t, spacing=spacing)
-                fi = fi[:, ::-1]  # 법선 반전
-                vi[:, 0] += x_lo
-                vi[:, 1] += x_lo
-                vi[:, 2] += z_lo
-                mesh_in = trimesh.Trimesh(vertices=vi, faces=fi)
-                mesh = trimesh.util.concatenate([mesh, mesh_in])
-                self.log_msg("   Dual isosurface (벽두께 시각화)")
-            except Exception as e:
-                self.log_msg(f"   Dual isosurface 실패: {e}")
-
         del phi
         gc.collect()
         return mesh
@@ -562,45 +544,30 @@ class GyroidApp:
         verts, faces, _, _ = marching_cubes(phi, level=-t, spacing=spacing)
         return trimesh.Trimesh(vertices=verts, faces=faces)
 
-    def _build_cross_section(self, mesh: "trimesh.Trimesh", gap_mm: float = 25.0) -> "trimesh.Trimesh":
-        """미러 플립 4분할: 절단면이 바깥(카메라 방향)."""
+    def _build_cross_section(self, mesh: "trimesh.Trimesh", gap_mm: float = 5.0) -> "trimesh.Trimesh":
+        """
+        Y축 중심 2분할 → gap만큼 벌려서 절단면(내부) 직접 노출.
+        1열 배열: 앞/뒤 반쪽이 Y방향으로 나란히, 사이 빈 공간으로 내부 구조 확인.
+        """
         bounds = mesh.bounds
-        cx = (bounds[0][0] + bounds[1][0]) / 2
         cy = (bounds[0][1] + bounds[1][1]) / 2
-        half = gap_mm / 2
 
         try:
-            top = mesh.slice_plane([cx, cy, 0], [0, -1, 0], cap=True)
-            bottom = mesh.slice_plane([cx, cy, 0], [0, 1, 0], cap=True)
-            q1 = top.slice_plane([cx, cy, 0], [-1, 0, 0], cap=True)
-            q2 = top.slice_plane([cx, cy, 0], [1, 0, 0], cap=True)
-            q3 = bottom.slice_plane([cx, cy, 0], [1, 0, 0], cap=True)
-            q4 = bottom.slice_plane([cx, cy, 0], [-1, 0, 0], cap=True)
+            half_pos = mesh.slice_plane([0, cy, 0], [0, 1, 0], cap=True)   # y > cy
+            half_neg = mesh.slice_plane([0, cy, 0], [0, -1, 0], cap=True)  # y < cy
         except Exception as e:
             self.log_msg(f"   단면 분할 실패: {e}")
             return mesh
 
-        q1.apply_translation([+half, +half, 0])
+        # 두 반쪽을 Y방향으로 gap만큼 벌림 → 절단면 사이에 빈 공간
+        half_pos.apply_translation([0, +gap_mm / 2, 0])
+        half_neg.apply_translation([0, -gap_mm / 2, 0])
 
-        q2.vertices[:, 0] = 2 * cx - q2.vertices[:, 0]
-        q2.invert()
-        q2.apply_translation([-half, +half, 0])
-
-        q3.vertices[:, 0] = 2 * cx - q3.vertices[:, 0]
-        q3.vertices[:, 1] = 2 * cy - q3.vertices[:, 1]
-        q3.apply_translation([-half, -half, 0])
-
-        q4.vertices[:, 1] = 2 * cy - q4.vertices[:, 1]
-        q4.invert()
-        q4.apply_translation([+half, -half, 0])
-
-        parts = [q for q in [q1, q2, q3, q4] if len(q.faces) > 0]
+        parts = [p for p in [half_pos, half_neg] if len(p.faces) > 0]
         if not parts:
             self.log_msg("   단면 결과 비어있음")
             return mesh
-        result = trimesh.util.concatenate(parts)
-        result.fix_normals()
-        return result
+        return trimesh.util.concatenate(parts)
 
     # ── STEP 변환 ──
 
@@ -670,7 +637,6 @@ class GyroidApp:
         res = max(30, min(120, int(self.res_var.get())))
         step_res = max(3, min(15, int(self.step_res_var.get())))
         include_duct = bool(self.duct_var.get())
-        dual_iso = bool(self.thickness_vis_var.get())
 
         layout = calc_full_layout(a)
         z_min = layout["z_start"]
@@ -755,34 +721,18 @@ class GyroidApp:
             del uc_mesh
             gc.collect()
 
-        # ── 십자 단면 (미러 플립) ──
+        # ── 단면 (2분할, 정면 내부 확인) ──
         if self.cross_section_var.get():
-            self.log_msg(f"[단면] 미러플립 생성 중 (res={res})...")
+            self.log_msg(f"[단면] 2분할 생성 중 (res={res})...")
             t0 = time.time()
             cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
-            cs_mesh = self._build_cross_section(cs_mesh, gap_mm=25.0)
+            cs_mesh = self._build_cross_section(cs_mesh, gap_mm=5.0)
             elapsed = time.time() - t0
             cs_path = os.path.join(self.output_dir, f"{base_name}_cross_section.stl")
             cs_mesh.export(cs_path, file_type="stl")
             cs_size = os.path.getsize(cs_path) / 1024 / 1024
             self.log_msg(f"[단면] 완료 ({len(cs_mesh.faces):,} faces, {elapsed:.1f}s, {cs_size:.1f} MB)")
             del cs_mesh
-            gc.collect()
-
-        # ── 벽두께 시각화 (dual isosurface) ──
-        if dual_iso:
-            self.log_msg(f"[벽두께] Dual isosurface 생성 중 (res={res})...")
-            t0 = time.time()
-            thick_mesh = self._build_gyroid(a, t, res, include_duct=False,
-                                            z_min=z_min, z_max=z_max,
-                                            dual_isosurface=True)
-            elapsed = time.time() - t0
-            thick_path = os.path.join(self.output_dir, f"{base_name}_thickness_vis.stl")
-            thick_mesh.export(thick_path, file_type="stl")
-            thick_size = os.path.getsize(thick_path) / 1024 / 1024
-            self.log_msg(f"[벽두께] 완료 ({len(thick_mesh.faces):,} faces, "
-                         f"{elapsed:.1f}s, {thick_size:.1f} MB)")
-            del thick_mesh
             gc.collect()
 
         self.log_msg("=== 완료! ===")
