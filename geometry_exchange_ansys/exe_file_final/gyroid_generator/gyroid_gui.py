@@ -50,6 +50,23 @@ MAX_STL_MB = 10.0
 MAX_STL_FACES = int((MAX_STL_MB * 1e6 - 84) / 50)  # binary STL: 84 + 50*N
 
 
+def _estimate_sa(a: float, n_cells_z: int) -> float:
+    """전체 도메인 표면적 추정 (mm²): 자이로이드 + 덕트벽 inner+outer."""
+    sa_gyroid = 3.1 / a * GYROID_DOMAIN_XY ** 2 * n_cells_z * a  # TPMS 표면
+    sa_duct_outer = 4.0 * DUCT_OUTER * TOTAL_Z
+    sa_duct_inner = 4.0 * DUCT_INNER * TOTAL_Z
+    return sa_gyroid + sa_duct_outer + sa_duct_inner
+
+
+def calc_max_res_for_stl(a: float, n_cells_z: int, max_faces: int = MAX_STL_FACES) -> int:
+    """STL max_faces 제한에 맞는 최대 res 계산. faces ~ 2 * SA * res^2 / a^2."""
+    sa = _estimate_sa(a, n_cells_z)
+    if sa <= 0:
+        return 60
+    res_max = (max_faces * a ** 2 / (2.0 * sa)) ** 0.5
+    return max(5, int(res_max))
+
+
 # ── 레이아웃 계산 함수 ──
 
 def calc_z_layout(a: float, total_z: float = TOTAL_Z, min_duct: float = MIN_DUCT_Z):
@@ -135,7 +152,7 @@ class GyroidApp:
         self.duct_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
         self.step_asm_var = tk.BooleanVar(value=True)
-        self.step_asm_res_var = tk.IntVar(value=25)
+        self.step_asm_res_var = tk.IntVar(value=10)
         self.unit_cell_var = tk.BooleanVar(value=False)
         self.cross_section_var = tk.BooleanVar(value=False)
 
@@ -271,26 +288,20 @@ class GyroidApp:
 
         # ── STL 크기 추정 + 10MB 자동 조절 ──
         try:
-            res_now = max(30, min(120, int(self.res_var.get())))
+            res_input = max(5, min(120, int(self.res_var.get())))
         except (tk.TclError, ValueError):
-            res_now = 60
-        sa_gyroid = 1780.0 * layout["n_cells_z"]
-        sa_duct   = 4.0 * DUCT_OUTER * TOTAL_Z
-        sa_total  = sa_gyroid + sa_duct
-        voxel_est = a / res_now
-        tri_est   = sa_total * 2.0 / (voxel_est ** 2)
-        stl_mb    = (tri_est * 50 + 84) / 1e6
+            res_input = 60
+        res_cap = calc_max_res_for_stl(a, layout["n_cells_z"])
+        res_eff = min(res_input, res_cap)  # 10MB 초과 시 자동 낮춤
 
-        # 10MB 초과 시 자동 낮춤 res 계산
-        if tri_est > MAX_STL_FACES:
-            auto_res = max(20, int(a * (MAX_STL_FACES / (sa_total * 2.0)) ** 0.5))
-            stl_res_info = f"res {res_now}->{auto_res} (10MB 제한)"
-            voxel_auto = a / auto_res
-            tri_auto = sa_total * 2.0 / (voxel_auto ** 2)
-            stl_mb_auto = (tri_auto * 50 + 84) / 1e6
-            stl_line = f"STL: ~{stl_mb_auto:.1f} MB ({stl_res_info})"
+        sa_total = _estimate_sa(a, layout["n_cells_z"])
+        tri_eff = sa_total * 2.0 / (a / res_eff) ** 2
+        stl_mb = (tri_eff * 50 + 84) / 1e6
+
+        if res_eff < res_input:
+            stl_line = f"STL: ~{stl_mb:.1f} MB (res {res_input}->{res_eff}, 10MB cap)"
         else:
-            stl_line = f"STL: ~{stl_mb:.1f} MB (res={res_now}) [OK]"
+            stl_line = f"STL: ~{stl_mb:.1f} MB (res={res_eff}) [OK]"
 
         # ── STEP Assembly 크기 추정 ──
         try:
@@ -677,15 +688,17 @@ class GyroidApp:
                    str(n_xy), str(n_z), str(z_start),
                    str(GYROID_XY_START), duct_flag, step_abs]
 
-        self.log_msg(f"   Assembly STEP 변환 시작...")
+        self.log_msg(f"   Assembly STEP start...")
         self.log_msg(f"   CMD: {os.path.basename(converter)}")
 
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         try:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=0,
+                env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             for raw_line in proc.stdout:
@@ -710,7 +723,7 @@ class GyroidApp:
     def do_generate(self) -> None:
         a = max(3.0, min(30.0, float(self.a_var.get())))
         t = max(0.01, min(0.50, float(self.t_var.get())))
-        res = max(30, min(120, int(self.res_var.get())))
+        res_input = max(5, min(120, int(self.res_var.get())))
         include_duct = bool(self.duct_var.get())
 
         layout = calc_full_layout(a)
@@ -721,15 +734,10 @@ class GyroidApp:
         vol_frac = self._quick_volume_fraction(a, t)
 
         # ── STL 10MB 자동 해상도 조절 ──
-        sa_gyroid = 1780.0 * layout["n_cells_z"]
-        sa_duct = 4.0 * DUCT_OUTER * TOTAL_Z
-        sa_total = sa_gyroid + sa_duct
-        voxel_check = a / res
-        tri_check = sa_total * 2.0 / (voxel_check ** 2)
-        if tri_check > MAX_STL_FACES:
-            res_auto = max(20, int(a * (MAX_STL_FACES / (sa_total * 2.0)) ** 0.5))
-            self.log_msg(f"[!] STL 10MB 초과 예상 → res {res} -> {res_auto} (자동 조절)")
-            res = res_auto
+        res_cap = calc_max_res_for_stl(a, layout["n_cells_z"])
+        res = min(res_input, res_cap)
+        if res < res_input:
+            self.log_msg(f"[!] STL 10MB cap: res {res_input} -> {res}")
 
         self.log_msg(f"=== Gyroid Generator v4 ===")
         self.log_msg(f"Parameters: a={a:.1f}mm, t={t:.2f}, duct={include_duct}")
@@ -738,7 +746,7 @@ class GyroidApp:
         self.log_msg(f"Layout: Z=[{z_min:.1f}, {z_max:.1f}]mm "
                       f"({layout['n_cells_z']} cells, {layout['gyroid_z']:.1f}mm)")
         self.log_msg(f"Front/back duct: {layout['duct_front']:.1f}mm each")
-        self.log_msg(f"STL res={res} (10MB cap)")
+        self.log_msg(f"STL res={res} (input={res_input}, cap={res_cap})")
         self.log_msg(f"Volume fraction: {vol_frac:.1f}%")
         self.log_msg(f"Min wall thickness: {wall_t:.2f}mm")
 

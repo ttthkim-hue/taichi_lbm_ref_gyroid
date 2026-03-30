@@ -104,7 +104,7 @@ def _make_duct_wall_ocp():
 
 def main() -> None:
     if len(sys.argv) != 10:
-        print(f"[ERROR] 인수 9개 필요, {len(sys.argv) - 1}개 받음")
+        print(f"[ERROR] Need 9 args, got {len(sys.argv) - 1}")
         print(__doc__)
         sys.exit(1)
 
@@ -122,11 +122,10 @@ def main() -> None:
     print(f"[INFO] Assembly STEP: a={a}mm t={t} res_cell={res_cell}")
     print(f"[INFO] Grid: {n_xy}x{n_xy}x{n_z} = {total_inst} instances")
     print(f"[INFO] Z=[{z_start:.1f}, {z_start + n_z * a:.1f}]mm, XY_start={xy_start:.2f}mm")
-    print(f"[INFO] Duct wall: {'포함' if inc_duct else '제외'}")
+    print(f"[INFO] Duct wall: {'yes' if inc_duct else 'no'}")
     sys.stdout.flush()
 
-    # ── OCP 로드 ──
-    print("[INFO] OCP 모듈 로딩...")
+    print("[INFO] Loading OCP modules...")
     sys.stdout.flush()
     try:
         from OCP.XCAFApp import XCAFApp_Application
@@ -138,26 +137,24 @@ def main() -> None:
         from OCP.gp import gp_Trsf, gp_Vec
         from OCP.TopLoc import TopLoc_Location
         from OCP.Interface import Interface_Static
-        print("[OK] OCP 로드 완료")
+        print("[OK] OCP loaded")
     except ImportError as e:
-        print(f"[ERROR] OCP import 실패: {e}")
+        print(f"[ERROR] OCP import failed: {e}")
         sys.exit(1)
     sys.stdout.flush()
 
-    # ── (1/4) 단위셀 OCP shape 생성 ──
-    print(f"[INFO] (1/4) 단위셀 생성 (res={res_cell})...")
+    print(f"[INFO] (1/4) Building unit cell (res={res_cell})...")
     sys.stdout.flush()
     t0 = time.time()
     try:
         cell_shape = _make_unit_cell_ocp(a, t, res_cell)
     except Exception as e:
-        print(f"[ERROR] 단위셀 생성 실패: {e}")
+        print(f"[ERROR] Unit cell failed: {e}")
         sys.exit(1)
-    print(f"[OK] 단위셀 완료 ({time.time() - t0:.1f}s, null={cell_shape.IsNull()})")
+    print(f"[OK] Unit cell done ({time.time() - t0:.1f}s, null={cell_shape.IsNull()})")
     sys.stdout.flush()
 
-    # ── (2/4) XCAF 문서 + Assembly 구성 ──
-    print(f"[INFO] (2/4) XCAF Assembly 구성 ({total_inst} instances)...")
+    print(f"[INFO] (2/4) XCAF Assembly ({total_inst} instances)...")
     sys.stdout.flush()
     t0 = time.time()
 
@@ -166,15 +163,12 @@ def main() -> None:
     app.InitDocument(doc)
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
 
-    # 단위셀을 PRODUCT_DEFINITION으로 1회 등록 (재사용 template)
     cell_label = shape_tool.AddShape(cell_shape)
     TDataStd_Name.Set_s(cell_label, TCollection_ExtendedString("GyrCell"))
 
-    # Root assembly label
     root_label = shape_tool.NewShape()
     TDataStd_Name.Set_s(root_label, TCollection_ExtendedString("GyrArray"))
 
-    # NEXT_ASSEMBLY_USAGE_OCCURENCE로 각 격자 위치에 인스턴싱
     for ix in range(n_xy):
         for iy in range(n_xy):
             for iz in range(n_z):
@@ -186,30 +180,28 @@ def main() -> None:
                 ))
                 shape_tool.AddComponent(root_label, cell_label, TopLoc_Location(trsf))
 
-    print(f"[OK] {total_inst} instances 배치 완료 ({time.time() - t0:.1f}s)")
+    print(f"[OK] {total_inst} instances placed ({time.time() - t0:.1f}s)")
     sys.stdout.flush()
 
-    # ── (3/4) 덕트벽 (B-rep solid) ──
     if inc_duct:
-        print("[INFO] (3/4) 덕트벽 B-rep solid 생성...")
+        print("[INFO] (3/4) Building duct wall (B-rep solid)...")
         sys.stdout.flush()
         t0 = time.time()
         try:
             wall_shape = _make_duct_wall_ocp()
             wall_label = shape_tool.AddShape(wall_shape)
             TDataStd_Name.Set_s(wall_label, TCollection_ExtendedString("DuctWall"))
-            print(f"[OK] 덕트벽 추가 완료 ({time.time() - t0:.1f}s)")
+            print(f"[OK] Duct wall added ({time.time() - t0:.1f}s)")
         except Exception as e:
-            print(f"[WARN] 덕트벽 생성 실패 (무시): {e}")
+            print(f"[WARN] Duct wall failed: {e}")
         sys.stdout.flush()
     else:
-        print("[INFO] (3/4) 덕트벽 제외")
+        print("[INFO] (3/4) Duct wall skipped")
         sys.stdout.flush()
 
     shape_tool.UpdateAssemblies()
 
-    # ── (4/4) ISO AP214 STEP 저장 ──
-    print("[INFO] (4/4) ISO 10303-214 (AP214) Assembly STEP 저장...")
+    print("[INFO] (4/4) Writing ISO 10303-214 (AP214) Assembly STEP...")
     sys.stdout.flush()
     Interface_Static.SetCVal_s("write.step.schema", "AP214")
 
@@ -220,20 +212,20 @@ def main() -> None:
 
     ok = writer.Transfer(doc)
     if not ok:
-        print("[WARN] Transfer 반환값 False (계속 진행)")
+        print("[WARN] Transfer returned False (continuing)")
 
     status = writer.Write(out_path)
     elapsed = time.time() - t0
 
     if status == 1 and os.path.isfile(out_path):
         size_kb = os.path.getsize(out_path) / 1024
-        print(f"[DONE] Assembly STEP 저장 완료: {size_kb:.1f} KB ({elapsed:.1f}s)")
-        print(f"[INFO] 규격: ISO 10303-214 (AP214)")
-        print(f"[INFO] 구조: PRODUCT_DEFINITION x1 (단위셀) + "
+        print(f"[DONE] Assembly STEP saved: {size_kb:.1f} KB ({elapsed:.1f}s)")
+        print(f"[INFO] Format: ISO 10303-214 (AP214)")
+        print(f"[INFO] Structure: PRODUCT_DEFINITION x1 + "
               f"NEXT_ASSEMBLY_USAGE_OCCURENCE x{total_inst}")
         sys.exit(0)
     else:
-        print(f"[ERROR] STEP 저장 실패 (status={status})")
+        print(f"[ERROR] STEP write failed (status={status})")
         sys.exit(1)
 
 
