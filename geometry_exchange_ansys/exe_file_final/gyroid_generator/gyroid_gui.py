@@ -46,7 +46,7 @@ VOLUME_FRACTION_RANGE = (20.0, 80.0)  # % (극단값 경고)
 MAX_VOXELS = 150_000_000    # 150M voxels (~600MB float32)
 
 # ── STL 크기 제한 ──
-MAX_STL_MB = 5.0
+MAX_STL_MB = 12.0
 MAX_STL_FACES = int((MAX_STL_MB * 1e6 - 84) / 50)  # binary STL: 84 + 50*N
 
 
@@ -187,7 +187,7 @@ class GyroidApp:
         a_entry.bind("<FocusOut>", lambda e: self._update_info_panel())
         a_entry.bind("<Return>", lambda e: self._update_info_panel())
         ttk.Label(param_frame,
-                  text="정합: 4, 6, 8, 12, 24 mm | ANSYS 10MB 이하: a≥12mm (STL) | 최대: 30mm",
+                  text="정합: 4, 6, 8, 12, 24 mm | ANSYS: 10MB대 (STL) | 최대: 30mm",
                   foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w")
 
         ttk.Label(param_frame, text="두께 파라미터 t:").grid(row=2, column=0, sticky="w", pady=(8, 0))
@@ -204,7 +204,7 @@ class GyroidApp:
         res_entry.grid(row=4, column=1, sticky="w", pady=(8, 0))
         res_entry.bind("<FocusOut>", lambda e: self._update_info_panel())
         res_entry.bind("<Return>", lambda e: self._update_info_panel())
-        ttk.Label(param_frame, text="30=빠름, 60=기본, 120=고품질 (10MB 초과 시 자동 조절)",
+        ttk.Label(param_frame, text="20=빠름, 40=기본, 120=고품질 (10MB대 자동 조절)",
                   foreground="gray").grid(row=5, column=0, columnspan=2, sticky="w")
 
         ttk.Checkbutton(param_frame, text="외벽 포함 (1.0mm 덕트벽)", variable=self.duct_var).grid(
@@ -229,7 +229,7 @@ class GyroidApp:
         # ── 출력 설정 ──
         out_frame = ttk.LabelFrame(main, text="  출력 설정  ", padding=10)
         out_frame.pack(fill="x", padx=4, pady=4)
-        ttk.Checkbutton(out_frame, text="STL 저장 (10MB 이하 자동 해상도 조절)",
+        ttk.Checkbutton(out_frame, text="STL 저장 (10MB대 자동 해상도 조절 + 50% decimation)",
                          variable=self.stl_var).pack(anchor="w")
 
         # STEP 생성 (Assembly)
@@ -302,7 +302,7 @@ class GyroidApp:
         vol_frac = self._quick_volume_fraction(a, t)
         wall_t = self._calc_min_wall(a, t, grid_n=40)
 
-        # ── STL 크기 추정 + 10MB 자동 조절 ──
+        # ── STL 크기 추정 + 10MB대 자동 조절 ──
         try:
             res_input = max(5, min(120, int(self.res_var.get())))
         except (tk.TclError, ValueError):
@@ -315,7 +315,7 @@ class GyroidApp:
         stl_mb = (tri_eff * 50 + 84) / 1e6
 
         if res_eff < res_input:
-            stl_line = f"STL: ~{stl_mb:.1f} MB (res {res_input}->{res_eff}, 10MB cap)"
+            stl_line = f"STL: ~{stl_mb:.1f} MB (res {res_input}->{res_eff}, 10MB cap+decimate)"
         else:
             stl_line = f"STL: ~{stl_mb:.1f} MB (res={res_eff}) [OK]"
 
@@ -763,11 +763,11 @@ class GyroidApp:
         wall_t = self._calc_min_wall(a, t)
         vol_frac = self._quick_volume_fraction(a, t)
 
-        # ── STL 10MB 자동 해상도 조절 ──
+        # ── STL 10MB대 자동 해상도 조절 ──
         res_cap = calc_max_res_for_stl(a, layout["n_cells_z"], layout["total_z"])
         res = min(res_input, res_cap)
         if res < res_input:
-            self.log_msg(f"[!] STL 10MB cap: res {res_input} -> {res}")
+            self.log_msg(f"[!] STL ~10MB cap: res {res_input} -> {res}")
 
         self.log_msg(f"=== Gyroid Generator v4 ===")
         self.log_msg(f"Parameters: a={a:.1f}mm, t={t:.2f}, duct={include_duct}")
