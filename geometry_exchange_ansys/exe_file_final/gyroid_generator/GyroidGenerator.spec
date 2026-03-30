@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# onedir 모드 + step_converter를 별도 exe로 빌드
+# onedir 모드: GUI + step_converter_assembly (ISO AP214)
 
 import os
 
@@ -63,37 +63,9 @@ gui_exe = EXE(
     console=True,
 )
 
-# ── STEP 변환기 (OCP 포함) ──
+# ── Assembly STEP 변환기 (ISO AP214, OCP/XCAF) ──
 step_hiddenimports = gui_hiddenimports + ocp_hiddenimports
 
-step_analysis = Analysis(
-    ["step_converter.py"],
-    pathex=[_spec_dir],
-    binaries=ocp_binaries,
-    datas=ocp_datas,
-    hiddenimports=step_hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    noarchive=False,
-    optimize=0,
-)
-step_pyz = PYZ(step_analysis.pure)
-
-step_exe = EXE(
-    step_pyz,
-    step_analysis.scripts,
-    [],
-    exclude_binaries=True,
-    name="step_converter",
-    debug=False,
-    strip=False,
-    upx=False,
-    console=True,
-)
-
-# ── Assembly STEP 변환기 (ISO AP214 단위셀 인스턴싱) ──
 asm_analysis = Analysis(
     ["step_converter_assembly.py"],
     pathex=[_spec_dir],
@@ -126,9 +98,6 @@ coll = COLLECT(
     gui_exe,
     gui_analysis.binaries,
     gui_analysis.datas,
-    step_exe,
-    step_analysis.binaries,
-    step_analysis.datas,
     asm_exe,
     asm_analysis.binaries,
     asm_analysis.datas,

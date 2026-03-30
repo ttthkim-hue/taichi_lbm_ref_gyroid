@@ -18,8 +18,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Syntax check gyroid_gui.py
-        run: python3 -m py_compile geometry_exchange_ansys/exe_file_final/gyroid_generator/gyroid_gui.py
+      - name: Syntax check
+        run: |
+          python3 -m py_compile geometry_exchange_ansys/exe_file_final/gyroid_generator/gyroid_gui.py
+          python3 -m py_compile geometry_exchange_ansys/exe_file_final/gyroid_generator/step_converter_assembly.py
 
   pyinstaller-windows:
     needs: verify-python-syntax

@@ -45,6 +45,10 @@ VOLUME_FRACTION_RANGE = (20.0, 80.0)  # % (극단값 경고)
 # ── 메모리 한계 ──
 MAX_VOXELS = 150_000_000    # 150M voxels (~600MB float32)
 
+# ── STL 크기 제한 ──
+MAX_STL_MB = 10.0
+MAX_STL_FACES = int((MAX_STL_MB * 1e6 - 84) / 50)  # binary STL: 84 + 50*N
+
 
 # ── 레이아웃 계산 함수 ──
 
@@ -128,11 +132,9 @@ class GyroidApp:
         self.a_var = tk.DoubleVar(value=4.0)
         self.t_var = tk.DoubleVar(value=0.10)
         self.res_var = tk.IntVar(value=60)
-        self.step_res_var = tk.IntVar(value=8)
         self.duct_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
-        self.step_var = tk.BooleanVar(value=True)
-        self.step_asm_var = tk.BooleanVar(value=False)
+        self.step_asm_var = tk.BooleanVar(value=True)
         self.step_asm_res_var = tk.IntVar(value=25)
         self.unit_cell_var = tk.BooleanVar(value=False)
         self.cross_section_var = tk.BooleanVar(value=False)
@@ -173,26 +175,17 @@ class GyroidApp:
         res_entry.grid(row=4, column=1, sticky="w", pady=(8, 0))
         res_entry.bind("<FocusOut>", lambda e: self._update_info_panel())
         res_entry.bind("<Return>", lambda e: self._update_info_panel())
-        ttk.Label(param_frame, text="30=빠름, 60=기본, 120=고품질 (STL 전용)", foreground="gray").grid(
-            row=5, column=0, columnspan=2, sticky="w"
-        )
-
-        ttk.Label(param_frame, text="STEP 해상도:").grid(row=6, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(param_frame, textvariable=self.step_res_var, width=12).grid(row=6, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(
-            param_frame,
-            text="5=빠름(~1분), 8=기본(~2분), 15=고품질(느림) - STEP 전용",
-            foreground="gray",
-        ).grid(row=7, column=0, columnspan=2, sticky="w")
+        ttk.Label(param_frame, text="30=빠름, 60=기본, 120=고품질 (10MB 초과 시 자동 조절)",
+                  foreground="gray").grid(row=5, column=0, columnspan=2, sticky="w")
 
         ttk.Checkbutton(param_frame, text="외벽 포함 (1.0mm 덕트벽)", variable=self.duct_var).grid(
-            row=8, column=0, columnspan=2, sticky="w", pady=(8, 0)
+            row=6, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
 
         # ── 정보 패널 (레이아웃 + 물성) ──
         info_frame = ttk.LabelFrame(main, text="  레이아웃 / 물성 정보  ", padding=8)
         info_frame.pack(fill="x", padx=4, pady=4)
-        self.info_text = tk.Text(info_frame, height=10, font=("Consolas", 9),
+        self.info_text = tk.Text(info_frame, height=11, font=("Consolas", 9),
                                  state="disabled", bg="#f8f8f8", relief="flat")
         self.info_text.pack(fill="x")
 
@@ -203,39 +196,34 @@ class GyroidApp:
         # ── 출력 설정 ──
         out_frame = ttk.LabelFrame(main, text="  출력 설정  ", padding=10)
         out_frame.pack(fill="x", padx=4, pady=4)
-        ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
-        ttk.Checkbutton(out_frame, text="STEP 저장 (mesh 기반, 수십~수백 MB)",
-                         variable=self.step_var).pack(anchor="w")
+        ttk.Checkbutton(out_frame, text="STL 저장 (10MB 이하 자동 해상도 조절)",
+                         variable=self.stl_var).pack(anchor="w")
 
-        # Assembly STEP 옵션
-        asm_row = ttk.Frame(out_frame)
-        asm_row.pack(anchor="w", fill="x")
+        # STEP 생성 (Assembly)
+        step_row = ttk.Frame(out_frame)
+        step_row.pack(anchor="w", fill="x")
         ttk.Checkbutton(
-            asm_row,
-            text="경량 STEP Assembly (ISO AP214, ~수백 KB)",
+            step_row,
+            text="STEP 생성 (ISO AP214 Assembly)",
             variable=self.step_asm_var,
         ).pack(side="left")
-        ttk.Label(asm_row, text=" cell res:").pack(side="left")
-        ttk.Entry(asm_row, textvariable=self.step_asm_res_var, width=5).pack(side="left")
-        ttk.Label(asm_row, text="(15~40)", foreground="gray").pack(side="left")
+        ttk.Label(step_row, text="  cell res:").pack(side="left")
+        asm_res_entry = ttk.Entry(step_row, textvariable=self.step_asm_res_var, width=5)
+        asm_res_entry.pack(side="left")
+        asm_res_entry.bind("<FocusOut>", lambda e: self._update_info_panel())
+        asm_res_entry.bind("<Return>", lambda e: self._update_info_panel())
+        ttk.Label(step_row, text="(8~40)", foreground="gray").pack(side="left")
 
         ttk.Label(
             out_frame,
-            text="  * Assembly STEP: 단위셀 1회 정의 + N회 인스턴싱 (NEXT_ASSEMBLY_USAGE_OCCURENCE)\n"
-                 "    ANSYS에서 Multi-body part로 인식 — SpaceClaim/DesignModeler 권장",
+            text="  * 단위셀 1회 정의 + N회 인스턴싱 (ANSYS SpaceClaim 호환)",
             foreground="gray",
             font=("TkDefaultFont", 8),
         ).pack(anchor="w")
 
         ttk.Checkbutton(out_frame, text="단위셀 STL (1 cell, 외벽 없음)", variable=self.unit_cell_var).pack(anchor="w")
-        ttk.Checkbutton(out_frame, text="단면 STL (Y축 2분할, 절단면 정면 배치 — 내부 직접 확인)",
+        ttk.Checkbutton(out_frame, text="단면 STL (Y축 2분할, 내부 직접 확인)",
                          variable=self.cross_section_var).pack(anchor="w")
-        ttk.Label(
-            out_frame,
-            text="* STEP(mesh)는 별도 저해상도 mesh로 생성 (형상 동일, Sewing 속도 확보)",
-            foreground="gray",
-            font=("TkDefaultFont", 8),
-        ).pack(anchor="w", pady=(4, 0))
 
         # ── 출력 폴더 ──
         path_frame = ttk.Frame(main)
@@ -281,41 +269,62 @@ class GyroidApp:
         vol_frac = self._quick_volume_fraction(a, t)
         wall_t = self._calc_min_wall(a, t, grid_n=40)
 
+        # ── STL 크기 추정 + 10MB 자동 조절 ──
         try:
             res_now = max(30, min(120, int(self.res_var.get())))
         except (tk.TclError, ValueError):
             res_now = 60
-        voxel_est = a / res_now
-        # 표면적 추정: 자이로이드 내부 + 덕트벽 외면
-        sa_gyroid = 1780.0 * layout["n_cells_z"]   # mm² (단위셀 수 비례)
-        sa_duct   = 4.0 * DUCT_OUTER * TOTAL_Z      # mm² (4면 외벽)
+        sa_gyroid = 1780.0 * layout["n_cells_z"]
+        sa_duct   = 4.0 * DUCT_OUTER * TOTAL_Z
         sa_total  = sa_gyroid + sa_duct
+        voxel_est = a / res_now
         tri_est   = sa_total * 2.0 / (voxel_est ** 2)
         stl_mb    = (tri_est * 50 + 84) / 1e6
 
+        # 10MB 초과 시 자동 낮춤 res 계산
+        if tri_est > MAX_STL_FACES:
+            auto_res = max(20, int(a * (MAX_STL_FACES / (sa_total * 2.0)) ** 0.5))
+            stl_res_info = f"res {res_now}->{auto_res} (10MB 제한)"
+            voxel_auto = a / auto_res
+            tri_auto = sa_total * 2.0 / (voxel_auto ** 2)
+            stl_mb_auto = (tri_auto * 50 + 84) / 1e6
+            stl_line = f"STL: ~{stl_mb_auto:.1f} MB ({stl_res_info})"
+        else:
+            stl_line = f"STL: ~{stl_mb:.1f} MB (res={res_now}) [OK]"
+
+        # ── STEP Assembly 크기 추정 ──
+        try:
+            asm_res = max(8, min(40, int(self.step_asm_res_var.get())))
+        except (tk.TclError, ValueError):
+            asm_res = 25
+        n_inst = layout["total_cells"]
+        cell_faces_est = 8.0 * asm_res ** 2
+        step_geo_kb = cell_faces_est * 1.5
+        step_inst_kb = n_inst * 2.0
+        step_kb = step_geo_kb + step_inst_kb
+        step_line = f"STEP: ~{step_kb:.0f} KB (cell={asm_res}, {n_inst} inst)"
+
         xy_mark = "[OK]" if layout["status"] == "perfect" else "[!]"
-        stl_mark = "[OK]" if stl_mb <= 10.0 else "[! >10MB]"
 
         lines = [
             f"--- Layout (a={a:.1f}mm) ---",
-            f"XY domain: {layout['domain_xy']:.1f}mm  "
-            f"({layout['n_cells_xy']} cells)  {xy_mark}",
-            f"Z  domain: {layout['gyroid_z']:.1f}mm  "
-            f"({layout['n_cells_z']} cells)",
-            f"Front/back duct: {layout['duct_front']:.1f}mm",
-            f"Z range: [{layout['z_start']:.1f}, {layout['z_end']:.1f}]mm",
+            f"XY: {layout['domain_xy']:.1f}mm ({layout['n_cells_xy']} cells) {xy_mark}"
+            f"  |  Z: {layout['gyroid_z']:.1f}mm ({layout['n_cells_z']} cells)",
+            f"Z range: [{layout['z_start']:.1f}, {layout['z_end']:.1f}]mm"
+            f"  |  buffer: {layout['duct_front']:.1f}mm",
             f"",
             f"--- Properties (t={t:.2f}) ---",
             f"Volume fraction: {vol_frac:.1f}%",
-            f"Min wall thickness: {wall_t:.2f}mm  "
-            f"{'[OK >= 1mm]' if wall_t >= MIN_WALL_THICKNESS else '[! < 1mm]'}",
-            f"Total cells: ~{layout['total_cells']}",
-            f"STL 예상 크기 (res={res_now}): ~{stl_mb:.1f} MB  {stl_mark}",
+            f"Min wall: {wall_t:.2f}mm  "
+            f"{'[OK >= 1mm]' if wall_t >= MIN_WALL_THICKNESS else '[WARNING < 1mm]'}",
+            f"",
+            f"--- File Size ---",
+            stl_line,
+            step_line,
         ]
 
         if layout["status"] == "truncated":
-            lines.append(f"")
-            lines.append(f"-> Suggested a = {layout['suggested_a']:.1f}mm (perfect alignment)")
+            lines.append(f"-> Suggested a = {layout['suggested_a']:.1f}mm (perfect fit)")
 
         self.info_text.config(state="normal")
         self.info_text.delete("1.0", "end")
@@ -324,13 +333,13 @@ class GyroidApp:
 
         warnings = []
         if t > MAX_T_SAFE:
-            warnings.append(f"[!] t={t:.2f} > {MAX_T_SAFE}: 위상전이 구간, 얇은 막 생성")
+            warnings.append(f"[!] t={t:.2f} > {MAX_T_SAFE}: 위상전이 구간")
         if wall_t < MIN_WALL_THICKNESS:
-            warnings.append(f"[!] 벽두께 {wall_t:.2f}mm < {MIN_WALL_THICKNESS}mm: 프린팅 불가")
+            warnings.append(f"[!] 벽두께 {wall_t:.2f}mm < {MIN_WALL_THICKNESS}mm")
         if layout["status"] == "truncated":
-            warnings.append(f"[i] a={a}mm은 XY {GYROID_DOMAIN_XY}mm과 비정합")
-        if vol_frac < VOLUME_FRACTION_RANGE[0] or vol_frac > VOLUME_FRACTION_RANGE[1]:
-            warnings.append(f"[i] 체적분율 {vol_frac:.1f}%: 일반 범위({VOLUME_FRACTION_RANGE}) 벗어남")
+            warnings.append(f"[i] a={a}mm 비정합")
+        if step_kb > 1000:
+            warnings.append(f"[i] STEP {step_kb:.0f}KB: cell res 낮추거나 a 증가 권장")
 
         self.warn_label.config(text="  |  ".join(warnings) if warnings else "")
 
@@ -418,7 +427,7 @@ class GyroidApp:
         return float(solid.sum()) / solid.size * 100
 
     def on_generate(self) -> None:
-        any_output = (self.stl_var.get() or self.step_var.get() or self.step_asm_var.get()
+        any_output = (self.stl_var.get() or self.step_asm_var.get()
                       or self.unit_cell_var.get() or self.cross_section_var.get())
         if not any_output:
             messagebox.showwarning("출력 선택 필요", "최소 1개 출력 옵션을 선택하세요.")
@@ -620,23 +629,7 @@ class GyroidApp:
             return mesh
         return trimesh.util.concatenate(parts)
 
-    # ── STEP 변환 ──
-
-    @staticmethod
-    def _find_converter() -> str:
-        if getattr(sys, "frozen", False):
-            base = os.path.dirname(sys.executable)
-            for name in ("step_converter.exe", "step_converter"):
-                p = os.path.join(base, name)
-                if os.path.isfile(p):
-                    return p
-            p = os.path.join(base, "_internal", "step_converter.py")
-            if os.path.isfile(p):
-                return p
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step_converter.py")
-        if os.path.isfile(p):
-            return p
-        return ""
+    # ── STEP 변환 (Assembly) ──
 
     @staticmethod
     def _find_asm_converter() -> str:
@@ -654,48 +647,6 @@ class GyroidApp:
         if os.path.isfile(p):
             return p
         return ""
-
-    def convert_to_step(self, stl_path: str, step_path: str) -> bool:
-        converter = self._find_converter()
-        if not converter:
-            self.log_msg("   step_converter를 찾을 수 없음")
-            return False
-
-        stl_abs = str(Path(stl_path).resolve())
-        step_abs = str(Path(step_path).resolve())
-
-        if converter.endswith(".py"):
-            cmd = [sys.executable, converter, stl_abs, step_abs]
-        else:
-            cmd = [converter, stl_abs, step_abs]
-
-        self.log_msg(f"   STEP 변환 시작...")
-        self.log_msg(f"   CMD: {os.path.basename(converter)}")
-
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=0,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            for raw_line in proc.stdout:
-                line = raw_line.decode("utf-8", errors="replace").rstrip()
-                if line:
-                    self.log_msg(f"   {line}")
-            proc.wait()
-            if proc.returncode == 0:
-                if os.path.isfile(step_abs):
-                    size_mb = os.path.getsize(step_abs) / 1024 / 1024
-                    self.log_msg(f"   STEP 저장 완료 ({size_mb:.1f} MB)")
-                return True
-            else:
-                self.log_msg(f"   STEP 변환 실패 (exit code {proc.returncode})")
-                return False
-        except Exception as exc:
-            self.log_msg(f"   STEP 프로세스 오류: {exc}")
-            return False
 
     def convert_to_step_assembly(self, a: float, t: float, res_cell: int,
                                   layout: dict, include_duct: bool,
@@ -760,7 +711,6 @@ class GyroidApp:
         a = max(3.0, min(30.0, float(self.a_var.get())))
         t = max(0.01, min(0.50, float(self.t_var.get())))
         res = max(30, min(120, int(self.res_var.get())))
-        step_res = max(3, min(15, int(self.step_res_var.get())))
         include_duct = bool(self.duct_var.get())
 
         layout = calc_full_layout(a)
@@ -770,14 +720,25 @@ class GyroidApp:
         wall_t = self._calc_min_wall(a, t)
         vol_frac = self._quick_volume_fraction(a, t)
 
-        self.log_msg(f"=== Gyroid Generator v2 ===")
+        # ── STL 10MB 자동 해상도 조절 ──
+        sa_gyroid = 1780.0 * layout["n_cells_z"]
+        sa_duct = 4.0 * DUCT_OUTER * TOTAL_Z
+        sa_total = sa_gyroid + sa_duct
+        voxel_check = a / res
+        tri_check = sa_total * 2.0 / (voxel_check ** 2)
+        if tri_check > MAX_STL_FACES:
+            res_auto = max(20, int(a * (MAX_STL_FACES / (sa_total * 2.0)) ** 0.5))
+            self.log_msg(f"[!] STL 10MB 초과 예상 → res {res} -> {res_auto} (자동 조절)")
+            res = res_auto
+
+        self.log_msg(f"=== Gyroid Generator v4 ===")
         self.log_msg(f"Parameters: a={a:.1f}mm, t={t:.2f}, duct={include_duct}")
         self.log_msg(f"Layout: XY=[{layout['gyroid_start']:.1f}, {layout['gyroid_end']:.1f}]mm "
                       f"({layout['n_cells_xy']} cells, {layout['status']})")
         self.log_msg(f"Layout: Z=[{z_min:.1f}, {z_max:.1f}]mm "
                       f"({layout['n_cells_z']} cells, {layout['gyroid_z']:.1f}mm)")
         self.log_msg(f"Front/back duct: {layout['duct_front']:.1f}mm each")
-        self.log_msg(f"Resolution: STL={res}, STEP={step_res}")
+        self.log_msg(f"STL res={res} (10MB cap)")
         self.log_msg(f"Volume fraction: {vol_frac:.1f}%")
         self.log_msg(f"Min wall thickness: {wall_t:.2f}mm")
 
@@ -793,7 +754,6 @@ class GyroidApp:
         base_name = f"gyroid_a{a_str}_t{t_str}"
 
         stl_path = os.path.join(self.output_dir, f"{base_name}.stl")
-        step_path = os.path.join(self.output_dir, f"{base_name}.step")
 
         # ── STL ──
         if self.stl_var.get():
@@ -807,31 +767,6 @@ class GyroidApp:
             self.log_msg(f"[STL] 저장: {stl_path} ({stl_size:.1f} MB)")
             del stl_mesh
             gc.collect()
-
-        # ── STEP ──
-        if self.step_var.get():
-            self.log_msg(f"[STEP] Mesh 생성 중 (res={step_res})...")
-            t0 = time.time()
-            step_mesh = self._build_gyroid(a, t, step_res, include_duct, z_min, z_max)
-            elapsed = time.time() - t0
-            n_faces = len(step_mesh.faces)
-            self.log_msg(f"[STEP] 완료 ({n_faces:,} faces, {elapsed:.1f}s)")
-
-            trimesh.repair.fix_normals(step_mesh)
-            trimesh.repair.fix_winding(step_mesh)
-            step_mesh.merge_vertices()
-            step_mesh.process(validate=True)
-
-            tmp_stl = stl_path + ".step_tmp.stl"
-            step_mesh.export(tmp_stl, file_type="stl")
-            tmp_stl_size = os.path.getsize(tmp_stl) / 1024 / 1024
-            self.log_msg(f"[STEP] 임시 STL: {n_faces:,} faces, {tmp_stl_size:.1f} MB")
-            del step_mesh
-            gc.collect()
-
-            self.convert_to_step(tmp_stl, step_path)
-            if os.path.isfile(tmp_stl):
-                os.remove(tmp_stl)
 
         # ── 단위셀 ──
         if self.unit_cell_var.get():
@@ -860,16 +795,18 @@ class GyroidApp:
             del cs_mesh
             gc.collect()
 
-        # ── Assembly STEP (경량, ISO AP214) ──
+        # ── STEP (ISO AP214 Assembly) ──
         if self.step_asm_var.get():
             try:
-                res_cell = max(15, min(40, int(self.step_asm_res_var.get())))
+                res_cell = max(8, min(40, int(self.step_asm_res_var.get())))
             except (tk.TclError, ValueError):
                 res_cell = 25
-            asm_step_path = os.path.join(self.output_dir, f"{base_name}_assembly.step")
-            self.log_msg(f"[ASM-STEP] Assembly STEP 생성 중 (res_cell={res_cell}, "
-                         f"grid={layout['n_cells_xy']}x{layout['n_cells_xy']}x{layout['n_cells_z']})...")
-            self.convert_to_step_assembly(a, t, res_cell, layout, include_duct, asm_step_path)
+            step_path = os.path.join(self.output_dir, f"{base_name}.step")
+            n_inst = layout["n_cells_xy"] ** 2 * layout["n_cells_z"]
+            self.log_msg(f"[STEP] Assembly STEP 생성 (cell res={res_cell}, "
+                         f"{layout['n_cells_xy']}x{layout['n_cells_xy']}x{layout['n_cells_z']}="
+                         f"{n_inst} instances)...")
+            self.convert_to_step_assembly(a, t, res_cell, layout, include_duct, step_path)
 
         self.log_msg("=== 완료! ===")
 
