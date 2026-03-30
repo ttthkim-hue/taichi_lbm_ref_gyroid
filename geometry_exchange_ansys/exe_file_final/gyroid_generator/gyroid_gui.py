@@ -201,7 +201,7 @@ class GyroidApp:
         ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="단위셀 STL (1 cell, 외벽 없음)", variable=self.unit_cell_var).pack(anchor="w")
-        ttk.Checkbutton(out_frame, text="단면 STL (2분할, 정면에서 내부 확인용)",
+        ttk.Checkbutton(out_frame, text="단면 STL (Y축 2분할, 절단면 정면 배치 — 내부 직접 확인)",
                          variable=self.cross_section_var).pack(anchor="w")
         ttk.Label(
             out_frame,
@@ -546,24 +546,34 @@ class GyroidApp:
 
     def _build_cross_section(self, mesh: "trimesh.Trimesh", gap_mm: float = 5.0) -> "trimesh.Trimesh":
         """
-        Y축 중심 2분할 → gap만큼 벌려서 절단면(내부) 직접 노출.
-        1열 배열: 앞/뒤 반쪽이 Y방향으로 나란히, 사이 빈 공간으로 내부 구조 확인.
+        Y축 중심 2분할, 양쪽 절단면이 모두 정면(-Y)을 향하도록 배치.
+
+        half_back (y > cy): 절단면 캡 법선이 -Y → 정면에서 바로 내부 보임
+        half_front(y < cy): Y축 미러 → 절단면 캡 법선도 -Y로 전환
+        두 반쪽을 X방향으로 나란히 배치 (1열 / 서로 가리지 않음)
         """
         bounds = mesh.bounds
         cy = (bounds[0][1] + bounds[1][1]) / 2
+        x_size = bounds[1][0] - bounds[0][0]  # 배치 간격 계산용
 
         try:
-            half_pos = mesh.slice_plane([0, cy, 0], [0, 1, 0], cap=True)   # y > cy
-            half_neg = mesh.slice_plane([0, cy, 0], [0, -1, 0], cap=True)  # y < cy
+            # half_back: y >= cy 쪽, 절단 캡 법선 = -Y (정면을 향함)
+            half_back = mesh.slice_plane([0, cy, 0], [0, 1, 0], cap=True)
+            # half_front: y <= cy 쪽, 절단 캡 법선 = +Y (정면 반대) → 미러로 반전
+            half_front = mesh.slice_plane([0, cy, 0], [0, -1, 0], cap=True)
         except Exception as e:
             self.log_msg(f"   단면 분할 실패: {e}")
             return mesh
 
-        # 두 반쪽을 Y방향으로 gap만큼 벌림 → 절단면 사이에 빈 공간
-        half_pos.apply_translation([0, +gap_mm / 2, 0])
-        half_neg.apply_translation([0, -gap_mm / 2, 0])
+        # half_front를 Y 미러 → 절단면 법선이 -Y로 전환 (정면을 향함)
+        half_front.vertices[:, 1] = 2 * cy - half_front.vertices[:, 1]
+        half_front.invert()  # 홀수축 미러 → 법선 방향 보정
 
-        parts = [p for p in [half_pos, half_neg] if len(p.faces) > 0]
+        # X방향으로 나란히 배치 (gap 간격), 양쪽 모두 절단면이 -Y 정면을 향함
+        half_back.apply_translation([-(x_size / 2 + gap_mm), 0, 0])
+        half_front.apply_translation([+(gap_mm), 0, 0])
+
+        parts = [p for p in [half_back, half_front] if len(p.faces) > 0]
         if not parts:
             self.log_msg("   단면 결과 비어있음")
             return mesh
@@ -721,9 +731,9 @@ class GyroidApp:
             del uc_mesh
             gc.collect()
 
-        # ── 단면 (2분할, 정면 내부 확인) ──
+        # ── 단면 (Y축 2분할, 절단면 정면 배치) ──
         if self.cross_section_var.get():
-            self.log_msg(f"[단면] 2분할 생성 중 (res={res})...")
+            self.log_msg(f"[단면] Y축 2분할 생성 중 (res={res}) — 절단면 정면 배치...")
             t0 = time.time()
             cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
             cs_mesh = self._build_cross_section(cs_mesh, gap_mm=5.0)
