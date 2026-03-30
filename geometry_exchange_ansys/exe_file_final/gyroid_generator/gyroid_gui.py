@@ -34,8 +34,8 @@ WALL_OVERLAP = 0.3          # mm (자이로이드 → 벽 침투)
 GYROID_DOMAIN_XY = DUCT_INNER + 2 * WALL_OVERLAP        # 24.0mm
 GYROID_XY_START = (DUCT_OUTER - GYROID_DOMAIN_XY) / 2   # 0.7mm
 GYROID_XY_END = GYROID_XY_START + GYROID_DOMAIN_XY       # 24.7mm
-MIN_DUCT_Z = 5.0           # mm (앞뒤 최소 빈 덕트)
-MIN_DUCT_Z_FALLBACK = 4.0  # mm (차선)
+GYROID_TARGET_Z = 100.0    # mm (자이로이드 목표 길이, buffer ON/OFF 공통)
+BUFFER_EACH = 5.0          # mm (앞뒤 버퍼 각각, ON 모드)
 
 # ── 안전 한계 ──
 MIN_WALL_THICKNESS = 1.0    # mm (3D 프린팅 최소 벽두께)
@@ -46,7 +46,7 @@ VOLUME_FRACTION_RANGE = (20.0, 80.0)  # % (극단값 경고)
 MAX_VOXELS = 150_000_000    # 150M voxels (~600MB float32)
 
 # ── STL 크기 제한 ──
-MAX_STL_MB = 10.0
+MAX_STL_MB = 5.0
 MAX_STL_FACES = int((MAX_STL_MB * 1e6 - 84) / 50)  # binary STL: 84 + 50*N
 
 
@@ -69,34 +69,38 @@ def calc_max_res_for_stl(a: float, n_cells_z: int, max_faces: int = MAX_STL_FACE
 
 # ── 레이아웃 계산 함수 ──
 
-def calc_z_layout(a: float, total_z: float = TOTAL_Z, min_duct: float = MIN_DUCT_Z,
-                   use_buffer: bool = True):
-    """Z=110mm 고정. use_buffer=True: 앞뒤 최소 5mm 빈 덕트, False: 버퍼 없이 최대 자이로이드."""
+def calc_z_layout(a: float, use_buffer: bool = True):
+    """
+    자이로이드 목표 길이는 항상 100mm (a의 정수배, 중앙정렬).
+
+    use_buffer=True (ON):
+        총 길이 = 110mm. 자이로이드 구간 = [buffer, buffer+L]. 앞뒤 빈 덕트.
+    use_buffer=False (OFF):
+        총 길이 = L_gyroid. 자이로이드 구간 = [0, L]. 빈 덕트 없음, 외벽도 L에 맞춤.
+    """
+    n_cells_z = int(GYROID_TARGET_Z // a)  # floor(100 / a)
+    gyroid_z = n_cells_z * a
+    remainder = GYROID_TARGET_Z - gyroid_z  # 중앙정렬용 나머지
+
     if use_buffer:
-        max_gyroid_z = total_z - 2 * min_duct
-        n_cells_z = int(max_gyroid_z // a)
-        gyroid_z = n_cells_z * a
-        remainder = total_z - gyroid_z
-
-        if remainder / 2 < MIN_DUCT_Z_FALLBACK:
-            min_duct = MIN_DUCT_Z_FALLBACK
-            max_gyroid_z = total_z - 2 * min_duct
-            n_cells_z = int(max_gyroid_z // a)
-            gyroid_z = n_cells_z * a
-            remainder = total_z - gyroid_z
+        total_z = TOTAL_Z  # 110mm
+        buffer_each = BUFFER_EACH + remainder / 2.0
+        z_start = buffer_each
+        z_end = buffer_each + gyroid_z
     else:
-        n_cells_z = int(total_z // a)
-        gyroid_z = n_cells_z * a
-        remainder = total_z - gyroid_z
+        total_z = gyroid_z  # L_gyroid만 (버퍼 없음)
+        z_start = 0.0
+        z_end = gyroid_z
+        buffer_each = 0.0
 
-    duct_each = remainder / 2
     return {
         "gyroid_z": gyroid_z,
         "n_cells_z": n_cells_z,
-        "duct_front": duct_each,
-        "duct_back": duct_each,
-        "z_start": duct_each,
-        "z_end": duct_each + gyroid_z,
+        "duct_front": buffer_each,
+        "duct_back": buffer_each,
+        "z_start": z_start,
+        "z_end": z_end,
+        "total_z": total_z,
     }
 
 
@@ -131,7 +135,7 @@ def calc_xy_layout(a: float):
 def calc_full_layout(a: float, use_buffer: bool = True):
     """XY + Z 통합 레이아웃 계산."""
     xy = calc_xy_layout(a)
-    z = calc_z_layout(a, TOTAL_Z, use_buffer=use_buffer)
+    z = calc_z_layout(a, use_buffer=use_buffer)
     return {
         **xy, **z,
         "a": a,
@@ -154,7 +158,7 @@ class GyroidApp:
 
         self.a_var = tk.DoubleVar(value=4.0)
         self.t_var = tk.DoubleVar(value=0.10)
-        self.res_var = tk.IntVar(value=60)
+        self.res_var = tk.IntVar(value=40)
         self.duct_var = tk.BooleanVar(value=True)
         self.buffer_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
@@ -328,12 +332,13 @@ class GyroidApp:
 
         xy_mark = "[OK]" if layout["status"] == "perfect" else "[!]"
 
+        buf_str = f"buffer {layout['duct_front']:.1f}mm" if self.buffer_var.get() else "no buffer"
         lines = [
-            f"--- Layout (a={a:.1f}mm) ---",
+            f"--- Layout (a={a:.1f}mm, total_z={layout['total_z']:.1f}mm) ---",
             f"XY: {layout['domain_xy']:.1f}mm ({layout['n_cells_xy']} cells) {xy_mark}"
             f"  |  Z: {layout['gyroid_z']:.1f}mm ({layout['n_cells_z']} cells)",
             f"Z range: [{layout['z_start']:.1f}, {layout['z_end']:.1f}]mm"
-            f"  |  buffer: {layout['duct_front']:.1f}mm",
+            f"  |  {buf_str}",
             f"",
             f"--- Properties (t={t:.2f}) ---",
             f"Volume fraction: {vol_frac:.1f}%",
@@ -497,19 +502,18 @@ class GyroidApp:
     # ── 자이로이드 메시 생성 (복셀 필드 합성) ──
 
     def _build_gyroid(self, a: float, t: float, res: int,
-                      include_duct: bool, z_min: float, z_max: float) -> "trimesh.Trimesh":
+                      include_duct: bool, z_min: float, z_max: float,
+                      total_z: float = TOTAL_Z) -> "trimesh.Trimesh":
         """
         복셀 필드 합성 방식으로 자이로이드(+덕트벽) mesh 생성.
-        include_duct=True 시 phi 필드에 덕트벽을 직접 합성 → mesh boolean 불필요.
-        padding으로 도메인 외곽을 void 처리하여 watertight mesh 보장.
+        total_z: 실제 덕트 총 길이 (buffer ON=110, OFF=L_gyroid)
         """
         voxel = a / max(res, 1)
 
         if include_duct:
-            # 전체 덕트 도메인 + padding (watertight 보장)
             pad = voxel * 2
             x_lo, x_hi = -pad, DUCT_OUTER + pad
-            z_lo, z_hi = -pad, TOTAL_Z + pad
+            z_lo, z_hi = -pad, total_z + pad
         else:
             # 자이로이드 도메인만
             pad = 0.0
@@ -567,7 +571,7 @@ class GyroidApp:
             iy_wall_hi = int(np.searchsorted(y, DUCT_OUTER - DUCT_WALL, side="right"))
 
             iz_duct_lo = int(np.searchsorted(z, 0.0))
-            iz_duct_hi = int(np.searchsorted(z, TOTAL_Z, side="right"))
+            iz_duct_hi = int(np.searchsorted(z, total_z, side="right"))
             iz_gyr_lo = int(np.searchsorted(z, z_min))
             iz_gyr_hi = int(np.searchsorted(z, z_max, side="right"))
 
@@ -699,18 +703,17 @@ class GyroidApp:
         n_xy = layout["n_cells_xy"]
         n_z  = layout["n_cells_z"]
         z_start = layout["z_start"]
+        l_total_z = layout["total_z"]
         duct_flag = "1" if include_duct else "0"
 
+        args = [str(a), str(t), str(res_cell),
+                str(n_xy), str(n_z), str(z_start),
+                str(GYROID_XY_START), duct_flag, str(l_total_z), step_abs]
+
         if converter.endswith(".py"):
-            cmd = [sys.executable, converter,
-                   str(a), str(t), str(res_cell),
-                   str(n_xy), str(n_z), str(z_start),
-                   str(GYROID_XY_START), duct_flag, step_abs]
+            cmd = [sys.executable, converter] + args
         else:
-            cmd = [converter,
-                   str(a), str(t), str(res_cell),
-                   str(n_xy), str(n_z), str(z_start),
-                   str(GYROID_XY_START), duct_flag, step_abs]
+            cmd = [converter] + args
 
         self.log_msg(f"   Assembly STEP start...")
         self.log_msg(f"   CMD: {os.path.basename(converter)}")
@@ -754,6 +757,7 @@ class GyroidApp:
         layout = calc_full_layout(a, use_buffer=use_buffer)
         z_min = layout["z_start"]
         z_max = layout["z_end"]
+        dyn_total_z = layout["total_z"]  # 동적 total_z (ON=110, OFF=L_gyroid)
 
         wall_t = self._calc_min_wall(a, t)
         vol_frac = self._quick_volume_fraction(a, t)
@@ -766,11 +770,12 @@ class GyroidApp:
 
         self.log_msg(f"=== Gyroid Generator v4 ===")
         self.log_msg(f"Parameters: a={a:.1f}mm, t={t:.2f}, duct={include_duct}")
+        self.log_msg(f"Buffer: {'ON' if use_buffer else 'OFF'} | "
+                      f"total_z={dyn_total_z:.1f}mm | gyroid={layout['gyroid_z']:.1f}mm")
         self.log_msg(f"Layout: XY=[{layout['gyroid_start']:.1f}, {layout['gyroid_end']:.1f}]mm "
                       f"({layout['n_cells_xy']} cells, {layout['status']})")
         self.log_msg(f"Layout: Z=[{z_min:.1f}, {z_max:.1f}]mm "
-                      f"({layout['n_cells_z']} cells, {layout['gyroid_z']:.1f}mm)")
-        self.log_msg(f"Front/back duct: {layout['duct_front']:.1f}mm each")
+                      f"({layout['n_cells_z']} cells)")
         self.log_msg(f"STL res={res} (input={res_input}, cap={res_cap})")
         self.log_msg(f"Volume fraction: {vol_frac:.1f}%")
         self.log_msg(f"Min wall thickness: {wall_t:.2f}mm")
@@ -792,7 +797,7 @@ class GyroidApp:
         if self.stl_var.get():
             self.log_msg(f"[STL] Mesh build (res={res})...")
             t0 = time.time()
-            stl_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
+            stl_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max, dyn_total_z)
             n_orig = len(stl_mesh.faces)
             elapsed = time.time() - t0
             self.log_msg(f"[STL] {n_orig:,} faces ({elapsed:.1f}s)")
