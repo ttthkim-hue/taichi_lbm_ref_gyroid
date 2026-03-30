@@ -50,19 +50,20 @@ MAX_STL_MB = 5.0
 MAX_STL_FACES = int((MAX_STL_MB * 1e6 - 84) / 50)  # binary STL: 84 + 50*N
 
 
-def _estimate_sa(a: float, n_cells_z: int) -> float:
-    """전체 도메인 표면적 추정 (mm²): 자이로이드 + 덕트벽 inner+outer."""
-    sa_gyroid = 3.1 / a * GYROID_DOMAIN_XY ** 2 * n_cells_z * a  # TPMS 표면
-    sa_duct_outer = 4.0 * DUCT_OUTER * TOTAL_Z
-    sa_duct_inner = 4.0 * DUCT_INNER * TOTAL_Z
+def _estimate_sa(a: float, n_cells_z: int, total_z: float = TOTAL_Z) -> float:
+    """전체 도메인 표면적 추정 (mm²): 자이로이드 + 덕트벽 inner+outer (동적 total_z)."""
+    sa_gyroid = 3.1 / a * GYROID_DOMAIN_XY ** 2 * n_cells_z * a
+    sa_duct_outer = 4.0 * DUCT_OUTER * total_z
+    sa_duct_inner = 4.0 * DUCT_INNER * total_z
     return sa_gyroid + sa_duct_outer + sa_duct_inner
 
 
-def calc_max_res_for_stl(a: float, n_cells_z: int, max_faces: int = MAX_STL_FACES) -> int:
-    """STL max_faces 제한에 맞는 최대 res 계산. faces ~ 2 * SA * res^2 / a^2."""
-    sa = _estimate_sa(a, n_cells_z)
+def calc_max_res_for_stl(a: float, n_cells_z: int, total_z: float = TOTAL_Z,
+                          max_faces: int = MAX_STL_FACES) -> int:
+    """STL max_faces 제한에 맞는 최대 res 계산."""
+    sa = _estimate_sa(a, n_cells_z, total_z)
     if sa <= 0:
-        return 60
+        return 40
     res_max = (max_faces * a ** 2 / (2.0 * sa)) ** 0.5
     return max(5, int(res_max))
 
@@ -306,7 +307,7 @@ class GyroidApp:
             res_input = max(5, min(120, int(self.res_var.get())))
         except (tk.TclError, ValueError):
             res_input = 60
-        res_cap = calc_max_res_for_stl(a, layout["n_cells_z"])
+        res_cap = calc_max_res_for_stl(a, layout["n_cells_z"], layout["total_z"])
         res_eff = min(res_input, res_cap)  # 10MB 초과 시 자동 낮춤
 
         sa_total = _estimate_sa(a, layout["n_cells_z"])
@@ -763,7 +764,7 @@ class GyroidApp:
         vol_frac = self._quick_volume_fraction(a, t)
 
         # ── STL 10MB 자동 해상도 조절 ──
-        res_cap = calc_max_res_for_stl(a, layout["n_cells_z"])
+        res_cap = calc_max_res_for_stl(a, layout["n_cells_z"], layout["total_z"])
         res = min(res_input, res_cap)
         if res < res_input:
             self.log_msg(f"[!] STL 10MB cap: res {res_input} -> {res}")
@@ -829,7 +830,7 @@ class GyroidApp:
         if self.cross_section_var.get():
             self.log_msg(f"[cross-section] build (res={res})...")
             t0 = time.time()
-            cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
+            cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max, dyn_total_z)
             cs_mesh = self._build_cross_section(cs_mesh, gap_mm=5.0)
             cs_mesh = self._decimate(cs_mesh, ratio=0.5)
             elapsed = time.time() - t0
