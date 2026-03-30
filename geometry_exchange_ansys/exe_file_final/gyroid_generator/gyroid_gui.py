@@ -69,17 +69,23 @@ def calc_max_res_for_stl(a: float, n_cells_z: int, max_faces: int = MAX_STL_FACE
 
 # ── 레이아웃 계산 함수 ──
 
-def calc_z_layout(a: float, total_z: float = TOTAL_Z, min_duct: float = MIN_DUCT_Z):
-    """Z=110mm 고정, 앞뒤 최소 5mm(안되면 4mm) 빈 덕트, 자이로이드 Z = a의 정수배."""
-    max_gyroid_z = total_z - 2 * min_duct
-    n_cells_z = int(max_gyroid_z // a)
-    gyroid_z = n_cells_z * a
-    remainder = total_z - gyroid_z
-
-    if remainder / 2 < MIN_DUCT_Z_FALLBACK:
-        min_duct = MIN_DUCT_Z_FALLBACK
+def calc_z_layout(a: float, total_z: float = TOTAL_Z, min_duct: float = MIN_DUCT_Z,
+                   use_buffer: bool = True):
+    """Z=110mm 고정. use_buffer=True: 앞뒤 최소 5mm 빈 덕트, False: 버퍼 없이 최대 자이로이드."""
+    if use_buffer:
         max_gyroid_z = total_z - 2 * min_duct
         n_cells_z = int(max_gyroid_z // a)
+        gyroid_z = n_cells_z * a
+        remainder = total_z - gyroid_z
+
+        if remainder / 2 < MIN_DUCT_Z_FALLBACK:
+            min_duct = MIN_DUCT_Z_FALLBACK
+            max_gyroid_z = total_z - 2 * min_duct
+            n_cells_z = int(max_gyroid_z // a)
+            gyroid_z = n_cells_z * a
+            remainder = total_z - gyroid_z
+    else:
+        n_cells_z = int(total_z // a)
         gyroid_z = n_cells_z * a
         remainder = total_z - gyroid_z
 
@@ -122,10 +128,10 @@ def calc_xy_layout(a: float):
     }
 
 
-def calc_full_layout(a: float):
+def calc_full_layout(a: float, use_buffer: bool = True):
     """XY + Z 통합 레이아웃 계산."""
     xy = calc_xy_layout(a)
-    z = calc_z_layout(a, TOTAL_Z)
+    z = calc_z_layout(a, TOTAL_Z, use_buffer=use_buffer)
     return {
         **xy, **z,
         "a": a,
@@ -150,6 +156,7 @@ class GyroidApp:
         self.t_var = tk.DoubleVar(value=0.10)
         self.res_var = tk.IntVar(value=60)
         self.duct_var = tk.BooleanVar(value=True)
+        self.buffer_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
         self.step_asm_var = tk.BooleanVar(value=True)
         self.step_asm_res_var = tk.IntVar(value=10)
@@ -198,6 +205,10 @@ class GyroidApp:
         ttk.Checkbutton(param_frame, text="외벽 포함 (1.0mm 덕트벽)", variable=self.duct_var).grid(
             row=6, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
+        buf_cb = ttk.Checkbutton(param_frame, text="앞뒤 빈 덕트 버퍼 (OFF: 자이로이드 Z 최대화)",
+                                  variable=self.buffer_var)
+        buf_cb.grid(row=7, column=0, columnspan=2, sticky="w")
+        buf_cb.bind("<ButtonRelease-1>", lambda e: self.root.after(50, self._update_info_panel))
 
         # ── 정보 패널 (레이아웃 + 물성) ──
         info_frame = ttk.LabelFrame(main, text="  레이아웃 / 물성 정보  ", padding=8)
@@ -282,7 +293,7 @@ class GyroidApp:
         except (tk.TclError, ValueError):
             return
 
-        layout = calc_full_layout(a)
+        layout = calc_full_layout(a, use_buffer=self.buffer_var.get())
         vol_frac = self._quick_volume_fraction(a, t)
         wall_t = self._calc_min_wall(a, t, grid_n=40)
 
@@ -422,6 +433,19 @@ class GyroidApp:
         if not ridge.any():
             return float(dt_c[solid_c].max()) * 2
         return float(dt_c[ridge].min()) * 2
+
+    def _decimate(self, mesh: "trimesh.Trimesh", ratio: float = 0.5) -> "trimesh.Trimesh":
+        """Quadric decimation으로 face 수를 ratio만큼 감소. 실패 시 원본 반환."""
+        target = max(100, int(len(mesh.faces) * ratio))
+        if len(mesh.faces) <= target:
+            return mesh
+        try:
+            reduced = mesh.simplify_quadric_decimation(target)
+            if len(reduced.faces) > 0:
+                return reduced
+        except Exception as e:
+            self.log_msg(f"   [decimation skipped: {e}]")
+        return mesh
 
     @staticmethod
     def _quick_volume_fraction(a: float, t: float, grid_n: int = 50) -> float:
@@ -725,8 +749,9 @@ class GyroidApp:
         t = max(0.01, min(0.50, float(self.t_var.get())))
         res_input = max(5, min(120, int(self.res_var.get())))
         include_duct = bool(self.duct_var.get())
+        use_buffer = bool(self.buffer_var.get())
 
-        layout = calc_full_layout(a)
+        layout = calc_full_layout(a, use_buffer=use_buffer)
         z_min = layout["z_start"]
         z_max = layout["z_end"]
 
@@ -765,14 +790,20 @@ class GyroidApp:
 
         # ── STL ──
         if self.stl_var.get():
-            self.log_msg(f"[STL] Mesh 생성 중 (res={res})...")
+            self.log_msg(f"[STL] Mesh build (res={res})...")
             t0 = time.time()
             stl_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
+            n_orig = len(stl_mesh.faces)
             elapsed = time.time() - t0
-            self.log_msg(f"[STL] 완료 ({len(stl_mesh.faces):,} faces, {elapsed:.1f}s)")
+            self.log_msg(f"[STL] {n_orig:,} faces ({elapsed:.1f}s)")
+
+            # 50% decimation
+            stl_mesh = self._decimate(stl_mesh, ratio=0.5)
+            self.log_msg(f"[STL] decimated: {len(stl_mesh.faces):,} faces")
+
             stl_mesh.export(stl_path, file_type="stl")
             stl_size = os.path.getsize(stl_path) / 1024 / 1024
-            self.log_msg(f"[STL] 저장: {stl_path} ({stl_size:.1f} MB)")
+            self.log_msg(f"[STL] saved: {stl_path} ({stl_size:.1f} MB)")
             del stl_mesh
             gc.collect()
 
@@ -791,15 +822,16 @@ class GyroidApp:
 
         # ── 단면 (Y축 2분할, 절단면 정면 배치) ──
         if self.cross_section_var.get():
-            self.log_msg(f"[단면] Y축 2분할 생성 중 (res={res}) — 절단면 정면 배치...")
+            self.log_msg(f"[cross-section] build (res={res})...")
             t0 = time.time()
             cs_mesh = self._build_gyroid(a, t, res, include_duct, z_min, z_max)
             cs_mesh = self._build_cross_section(cs_mesh, gap_mm=5.0)
+            cs_mesh = self._decimate(cs_mesh, ratio=0.5)
             elapsed = time.time() - t0
             cs_path = os.path.join(self.output_dir, f"{base_name}_cross_section.stl")
             cs_mesh.export(cs_path, file_type="stl")
             cs_size = os.path.getsize(cs_path) / 1024 / 1024
-            self.log_msg(f"[단면] 완료 ({len(cs_mesh.faces):,} faces, {elapsed:.1f}s, {cs_size:.1f} MB)")
+            self.log_msg(f"[cross-section] {len(cs_mesh.faces):,} faces, {elapsed:.1f}s, {cs_size:.1f} MB")
             del cs_mesh
             gc.collect()
 
