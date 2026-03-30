@@ -153,9 +153,9 @@ class GyroidApp:
         a_entry.grid(row=0, column=1, sticky="w")
         a_entry.bind("<FocusOut>", lambda e: self._update_info_panel())
         a_entry.bind("<Return>", lambda e: self._update_info_panel())
-        ttk.Label(param_frame, text="권장: 3~8 mm (정합: 3, 4, 6, 8)", foreground="gray").grid(
-            row=1, column=0, columnspan=2, sticky="w"
-        )
+        ttk.Label(param_frame,
+                  text="정합: 4, 6, 8, 12, 24 mm | ANSYS 10MB 이하: a≥12mm (STL) | 최대: 30mm",
+                  foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w")
 
         ttk.Label(param_frame, text="두께 파라미터 t:").grid(row=2, column=0, sticky="w", pady=(8, 0))
         t_entry = ttk.Entry(param_frame, textvariable=self.t_var, width=12)
@@ -167,7 +167,10 @@ class GyroidApp:
         )
 
         ttk.Label(param_frame, text="STL 해상도 (res):").grid(row=4, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(param_frame, textvariable=self.res_var, width=12).grid(row=4, column=1, sticky="w", pady=(8, 0))
+        res_entry = ttk.Entry(param_frame, textvariable=self.res_var, width=12)
+        res_entry.grid(row=4, column=1, sticky="w", pady=(8, 0))
+        res_entry.bind("<FocusOut>", lambda e: self._update_info_panel())
+        res_entry.bind("<Return>", lambda e: self._update_info_panel())
         ttk.Label(param_frame, text="30=빠름, 60=기본, 120=고품질 (STL 전용)", foreground="gray").grid(
             row=5, column=0, columnspan=2, sticky="w"
         )
@@ -187,7 +190,7 @@ class GyroidApp:
         # ── 정보 패널 (레이아웃 + 물성) ──
         info_frame = ttk.LabelFrame(main, text="  레이아웃 / 물성 정보  ", padding=8)
         info_frame.pack(fill="x", padx=4, pady=4)
-        self.info_text = tk.Text(info_frame, height=9, font=("Consolas", 9),
+        self.info_text = tk.Text(info_frame, height=10, font=("Consolas", 9),
                                  state="disabled", bg="#f8f8f8", relief="flat")
         self.info_text.pack(fill="x")
 
@@ -245,7 +248,7 @@ class GyroidApp:
 
     def _update_info_panel(self) -> None:
         try:
-            a = max(3.0, min(10.0, float(self.a_var.get())))
+            a = max(3.0, min(30.0, float(self.a_var.get())))
             t = max(0.01, min(0.50, float(self.t_var.get())))
         except (tk.TclError, ValueError):
             return
@@ -254,7 +257,20 @@ class GyroidApp:
         vol_frac = self._quick_volume_fraction(a, t)
         wall_t = self._calc_min_wall(a, t, grid_n=40)
 
+        try:
+            res_now = max(30, min(120, int(self.res_var.get())))
+        except (tk.TclError, ValueError):
+            res_now = 60
+        voxel_est = a / res_now
+        # 표면적 추정: 자이로이드 내부 + 덕트벽 외면
+        sa_gyroid = 1780.0 * layout["n_cells_z"]   # mm² (단위셀 수 비례)
+        sa_duct   = 4.0 * DUCT_OUTER * TOTAL_Z      # mm² (4면 외벽)
+        sa_total  = sa_gyroid + sa_duct
+        tri_est   = sa_total * 2.0 / (voxel_est ** 2)
+        stl_mb    = (tri_est * 50 + 84) / 1e6
+
         xy_mark = "[OK]" if layout["status"] == "perfect" else "[!]"
+        stl_mark = "[OK]" if stl_mb <= 10.0 else "[! >10MB]"
 
         lines = [
             f"--- Layout (a={a:.1f}mm) ---",
@@ -270,6 +286,7 @@ class GyroidApp:
             f"Min wall thickness: {wall_t:.2f}mm  "
             f"{'[OK >= 1mm]' if wall_t >= MIN_WALL_THICKNESS else '[! < 1mm]'}",
             f"Total cells: ~{layout['total_cells']}",
+            f"STL 예상 크기 (res={res_now}): ~{stl_mb:.1f} MB  {stl_mark}",
         ]
 
         if layout["status"] == "truncated":
@@ -642,7 +659,7 @@ class GyroidApp:
     # ── 메인 생성 흐름 ──
 
     def do_generate(self) -> None:
-        a = max(3.0, min(10.0, float(self.a_var.get())))
+        a = max(3.0, min(30.0, float(self.a_var.get())))
         t = max(0.01, min(0.50, float(self.t_var.get())))
         res = max(30, min(120, int(self.res_var.get())))
         step_res = max(3, min(15, int(self.step_res_var.get())))
