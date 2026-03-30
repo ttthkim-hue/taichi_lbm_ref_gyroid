@@ -93,6 +93,34 @@ step_exe = EXE(
     console=True,
 )
 
+# ── Assembly STEP 변환기 (ISO AP214 단위셀 인스턴싱) ──
+asm_analysis = Analysis(
+    ["step_converter_assembly.py"],
+    pathex=[_spec_dir],
+    binaries=ocp_binaries,
+    datas=ocp_datas,
+    hiddenimports=step_hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+asm_pyz = PYZ(asm_analysis.pure)
+
+asm_exe = EXE(
+    asm_pyz,
+    asm_analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="step_converter_assembly",
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,
+)
+
 # ── 하나의 폴더에 모두 COLLECT ──
 coll = COLLECT(
     gui_exe,
@@ -101,6 +129,9 @@ coll = COLLECT(
     step_exe,
     step_analysis.binaries,
     step_analysis.datas,
+    asm_exe,
+    asm_analysis.binaries,
+    asm_analysis.datas,
     strip=False,
     upx=False,
     name="GyroidGenerator",

@@ -132,6 +132,8 @@ class GyroidApp:
         self.duct_var = tk.BooleanVar(value=True)
         self.stl_var = tk.BooleanVar(value=True)
         self.step_var = tk.BooleanVar(value=True)
+        self.step_asm_var = tk.BooleanVar(value=False)
+        self.step_asm_res_var = tk.IntVar(value=25)
         self.unit_cell_var = tk.BooleanVar(value=False)
         self.cross_section_var = tk.BooleanVar(value=False)
 
@@ -202,13 +204,35 @@ class GyroidApp:
         out_frame = ttk.LabelFrame(main, text="  출력 설정  ", padding=10)
         out_frame.pack(fill="x", padx=4, pady=4)
         ttk.Checkbutton(out_frame, text="STL 저장", variable=self.stl_var).pack(anchor="w")
-        ttk.Checkbutton(out_frame, text="STEP 저장", variable=self.step_var).pack(anchor="w")
+        ttk.Checkbutton(out_frame, text="STEP 저장 (mesh 기반, 수십~수백 MB)",
+                         variable=self.step_var).pack(anchor="w")
+
+        # Assembly STEP 옵션
+        asm_row = ttk.Frame(out_frame)
+        asm_row.pack(anchor="w", fill="x")
+        ttk.Checkbutton(
+            asm_row,
+            text="경량 STEP Assembly (ISO AP214, ~수백 KB)",
+            variable=self.step_asm_var,
+        ).pack(side="left")
+        ttk.Label(asm_row, text=" cell res:").pack(side="left")
+        ttk.Entry(asm_row, textvariable=self.step_asm_res_var, width=5).pack(side="left")
+        ttk.Label(asm_row, text="(15~40)", foreground="gray").pack(side="left")
+
+        ttk.Label(
+            out_frame,
+            text="  * Assembly STEP: 단위셀 1회 정의 + N회 인스턴싱 (NEXT_ASSEMBLY_USAGE_OCCURENCE)\n"
+                 "    ANSYS에서 Multi-body part로 인식 — SpaceClaim/DesignModeler 권장",
+            foreground="gray",
+            font=("TkDefaultFont", 8),
+        ).pack(anchor="w")
+
         ttk.Checkbutton(out_frame, text="단위셀 STL (1 cell, 외벽 없음)", variable=self.unit_cell_var).pack(anchor="w")
         ttk.Checkbutton(out_frame, text="단면 STL (Y축 2분할, 절단면 정면 배치 — 내부 직접 확인)",
                          variable=self.cross_section_var).pack(anchor="w")
         ttk.Label(
             out_frame,
-            text="* STEP는 별도 저해상도 mesh로 생성 (형상 동일, Sewing 속도 확보)",
+            text="* STEP(mesh)는 별도 저해상도 mesh로 생성 (형상 동일, Sewing 속도 확보)",
             foreground="gray",
             font=("TkDefaultFont", 8),
         ).pack(anchor="w", pady=(4, 0))
@@ -394,8 +418,8 @@ class GyroidApp:
         return float(solid.sum()) / solid.size * 100
 
     def on_generate(self) -> None:
-        any_output = (self.stl_var.get() or self.step_var.get() or self.unit_cell_var.get()
-                      or self.cross_section_var.get())
+        any_output = (self.stl_var.get() or self.step_var.get() or self.step_asm_var.get()
+                      or self.unit_cell_var.get() or self.cross_section_var.get())
         if not any_output:
             messagebox.showwarning("출력 선택 필요", "최소 1개 출력 옵션을 선택하세요.")
             return
@@ -614,6 +638,23 @@ class GyroidApp:
             return p
         return ""
 
+    @staticmethod
+    def _find_asm_converter() -> str:
+        """step_converter_assembly 실행 파일/스크립트 경로 탐색."""
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(sys.executable)
+            for name in ("step_converter_assembly.exe", "step_converter_assembly"):
+                p = os.path.join(base, name)
+                if os.path.isfile(p):
+                    return p
+            p = os.path.join(base, "_internal", "step_converter_assembly.py")
+            if os.path.isfile(p):
+                return p
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step_converter_assembly.py")
+        if os.path.isfile(p):
+            return p
+        return ""
+
     def convert_to_step(self, stl_path: str, step_path: str) -> bool:
         converter = self._find_converter()
         if not converter:
@@ -654,6 +695,63 @@ class GyroidApp:
                 return False
         except Exception as exc:
             self.log_msg(f"   STEP 프로세스 오류: {exc}")
+            return False
+
+    def convert_to_step_assembly(self, a: float, t: float, res_cell: int,
+                                  layout: dict, include_duct: bool,
+                                  step_path: str) -> bool:
+        """
+        step_converter_assembly를 서브프로세스로 실행.
+        ISO 10303-214 Assembly STEP 생성 (단위셀 인스턴싱 방식).
+        """
+        converter = self._find_asm_converter()
+        if not converter:
+            self.log_msg("   step_converter_assembly를 찾을 수 없음")
+            return False
+
+        step_abs = str(Path(step_path).resolve())
+        n_xy = layout["n_cells_xy"]
+        n_z  = layout["n_cells_z"]
+        z_start = layout["z_start"]
+        duct_flag = "1" if include_duct else "0"
+
+        if converter.endswith(".py"):
+            cmd = [sys.executable, converter,
+                   str(a), str(t), str(res_cell),
+                   str(n_xy), str(n_z), str(z_start),
+                   str(GYROID_XY_START), duct_flag, step_abs]
+        else:
+            cmd = [converter,
+                   str(a), str(t), str(res_cell),
+                   str(n_xy), str(n_z), str(z_start),
+                   str(GYROID_XY_START), duct_flag, step_abs]
+
+        self.log_msg(f"   Assembly STEP 변환 시작...")
+        self.log_msg(f"   CMD: {os.path.basename(converter)}")
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=0,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    self.log_msg(f"   {line}")
+            proc.wait()
+            if proc.returncode == 0:
+                if os.path.isfile(step_abs):
+                    size_kb = os.path.getsize(step_abs) / 1024
+                    self.log_msg(f"   Assembly STEP 저장 완료 ({size_kb:.1f} KB)")
+                return True
+            else:
+                self.log_msg(f"   Assembly STEP 변환 실패 (exit code {proc.returncode})")
+                return False
+        except Exception as exc:
+            self.log_msg(f"   Assembly STEP 프로세스 오류: {exc}")
             return False
 
     # ── 메인 생성 흐름 ──
@@ -761,6 +859,17 @@ class GyroidApp:
             self.log_msg(f"[단면] 완료 ({len(cs_mesh.faces):,} faces, {elapsed:.1f}s, {cs_size:.1f} MB)")
             del cs_mesh
             gc.collect()
+
+        # ── Assembly STEP (경량, ISO AP214) ──
+        if self.step_asm_var.get():
+            try:
+                res_cell = max(15, min(40, int(self.step_asm_res_var.get())))
+            except (tk.TclError, ValueError):
+                res_cell = 25
+            asm_step_path = os.path.join(self.output_dir, f"{base_name}_assembly.step")
+            self.log_msg(f"[ASM-STEP] Assembly STEP 생성 중 (res_cell={res_cell}, "
+                         f"grid={layout['n_cells_xy']}x{layout['n_cells_xy']}x{layout['n_cells_z']})...")
+            self.convert_to_step_assembly(a, t, res_cell, layout, include_duct, asm_step_path)
 
         self.log_msg("=== 완료! ===")
 
